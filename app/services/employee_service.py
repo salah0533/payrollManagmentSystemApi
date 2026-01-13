@@ -44,6 +44,8 @@ def update_employee(new_data:dict,db:Session=Depends(get_db))->None:
             raise EmployeeNotFound("Employee not found")
         
         for key,val in new_data:
+            if not val:
+                continue
             setattr(employee,key,val)
         db.commit()
 
@@ -57,6 +59,6 @@ def delete_employee(id:int,db:Session=Depends(get_db)):
         if not emp:
             raise EmployeeNotFound("Employee not found")
         db.delete(emp)
-
+        db.commit()
     except Exception as e:
         raise e

@@ -22,16 +22,17 @@ def add_new_attendence(emp_id,entry_time,exit_time,date,type_id,db:Session=Depen
     except SQLAlchemyError as e:
         raise e
     
-def add_exit_attendence(emp_id,exit_time,date,type_id,db:Session=Depends(get_db)):
+def update_exit_attendence(att,exit_time,db:Session=Depends(get_db)):
     try:
-        att = db.scalars(
-            select(Attendence).where(
-                Attendence.employee_id==emp_id,
-                Attendence.date==date
-            )).one_or_none()
-        if not att:
-            raise NoEntryTimeFound("not entry time found for attendence in " + date)
         att.exit_time = exit_time
+        db.commit()
+        db.refresh(att)
+    except Exception as e:
+        raise e
+
+def update_entry_attendence(att,entry_time,type_id,db:Session=Depends(get_db)):
+    try:
+        att.entry_time = entry_time
         att.attendence_type = type_id
         db.commit()
         db.refresh(att)
@@ -86,5 +87,18 @@ def get_attendence_type(emp_id:int,db:Session=Depends(get_db)):
         else:
             return 0
         
+    except Exception as e:
+        raise e
+
+def get_attendence(emp_id,date,db:Session=Depends(get_db)):
+    try:
+        att = db.scalars(
+            select(Attendence)
+            .where(
+                Attendence.employee_id==emp_id,
+                Attendence.date==date
+            )
+        ).one_or_none()
+        return att
     except Exception as e:
         raise e
