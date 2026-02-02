@@ -6,23 +6,24 @@ class Employees(Base):
     __tablename__ = "employees"
 
     id = Column(Integer,primary_key=True,index=True)
-    name = Column(String(50) , nullable=False)
-    role_id = Column(Integer,ForeignKey("roles.id"),nullable=False)
+    fullname = Column(String(50) , nullable=False)
     job_title = Column(String, nullable=False)
     phone = Column(String(14),nullable=False)
+    email = Column(String(50))
     dues = Column(DECIMAL, nullable=False)
-    daly_work_hours = Column(Integer, nullable=False)
-    extra_hours_price = Column(DECIMAL, nullable=False)
-    hour_price = Column(DECIMAL, nullable=False)
+    salary_type = Column(Integer,ForeignKey("salary_type.id"),nullable=False)
+    monthly_price = Column(DECIMAL, nullable=False)
     day_price = Column(DECIMAL, nullable=False)
-    month_price = Column(DECIMAL, nullable=False)
+    hour_price = Column(DECIMAL, nullable=False)
+    extra_hours_price = Column(DECIMAL, nullable=False)
+    daly_work_hours = Column(Integer, nullable=False)
     vacation_days = Column(Integer, nullable=False) #allowed yearly vacation days
-    auto_attendence = Column(Boolean,nullable=False)
     is_active = Column(Boolean,nullable=False)
+    allowed_late = Column(DECIMAL,nullable=False)
+    min_extraTime = Column(DECIMAL,nullable=False) # not paid
     
-    roles_tab = relationship("Roles",back_populates="employee_tab")
 
-    attendence_tab = relationship("Attendence",back_populates="attendence",
+    attendence_tab = relationship("Attendence",back_populates="employee_tab",
                              cascade="all, delete-orphan")
     
     payment_tab = relationship("Payments",back_populates="employee_tab",
@@ -30,6 +31,7 @@ class Employees(Base):
     
     vacation_tab = relationship("Vacation",back_populates="employee_tab",
                              cascade="all, delete-orphan")
+    salary_type_tab = relationship("SalaryType",back_populates="employee_tab")
 
     
     def to_dict(self):

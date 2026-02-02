@@ -8,3 +8,9 @@ class PaymentTypes(Base):
     payment_type = Column(String(25), nullable=False)
     
     payment_tab = relationship("Payments",back_populates="payment_types_tab")
+
+
+# 0 - pyment
+# 1 - reduction
+# 2 - bonus
+# 3 - attendence

@@ -1,5 +1,5 @@
 from app.db.base import Base
-from sqlalchemy import Column,String,Integer,ForeignKey,TIMESTAMP,DECIMAL
+from sqlalchemy import Column,String,Integer,ForeignKey,TIMESTAMP,DECIMAL,Date
 from sqlalchemy.orm import relationship
 
 class Payments(Base):
@@ -10,6 +10,8 @@ class Payments(Base):
     amount = Column(DECIMAL, nullable=False)
     payment_type = Column(Integer,ForeignKey("payment_types.id"), nullable=False)
     description = Column(String, nullable=False)
+    start = Column(Date)
+    end = Column(Date)
 
     payment_types_tab = relationship("PaymentTypes",back_populates="payment_tab")
     employee_tab = relationship("Employees",back_populates="payment_tab")

@@ -1,7 +1,8 @@
 from app.db.base import Base
-from sqlalchemy import Column,Time
+from sqlalchemy import Column,Time,DECIMAL
 
 class Settings(Base):
-    entry_time = Column(Time,nullable=False)
-    exit_time = Column(Time,nullable=False)
+    entry_time = Column(Time)
+    exit_time = Column(Time)
+
     
