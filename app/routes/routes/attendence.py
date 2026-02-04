@@ -1,35 +1,40 @@
 from fastapi import APIRouter
-from app.schemas.attendenceBaseModel import AttendenceBaseModel
-from app.services.attendence_service import add_new_attendence,get_attendence_type,update_entry_attendence,update_exit_attendence,get_attendence,add_entry_attendence
+from app.schemas.attendenceBaseModel import AttendenceBaseModel,DataRange
+from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence,update_attendence,get_employee_attendence,get_employees_attendence,delete_attendence
+from datetime import date as Date
+from fastapi import Depends
 
 router = APIRouter()
 
+
+@router.get("/emps/{date}")
+def get_emps_att(date:Date):
+        res = get_employees_attendence()
+        return {"message":"","data":res,"status":True}
+
+@router.get("/emp/{id}/{start}/{end}")
+def get_emp_att(id:int,dates:DataRange=Depends()):
+        res = get_employee_attendence(id,dates.start,dates.end)
+        return {"message":"","data":res,"status":True}
+        
+
 @router.put("/add_attendence")
 def add_attendence(req:AttendenceBaseModel):
-    try:
-        att = get_attendence(req.employee_id,req.date)
-        attendence_type = get_attendence_type(req.employee_id)
+
+        att = get_attendence(req.employee_id,req.date) if req.employee_id else None
+
+        req.attendence_type =  get_attendance_type(req.employee_id,req.entry_time,req.exit_time,req.attendence_type) 
+
 
         if att:
-            if req.exit_time:
-                if req.entry_time < req.exit_time:
-                    update_entry_attendence(att,req.date,attendence_type)
-                    update_exit_attendence(att,req.date)
-                else:
-                    return {"message":"the entry time is biger the exit time","data":None,"status":False}
-            else:
-                update_entry_attendence(att,req.date,attendence_type)
-        elif req.exit_time:
-            if req.entry_time < req.exit_time:
-                add_new_attendence(req.employee_id,req.entry_time,req.exit_time,req.date,type_id=attendence_type) 
-            else:
-                return {"message":"the entry time is biger the exit time","data":None,"status":False}
+                update_attendence(att,req)
         else:
-            add_entry_attendence(req.employee_id,req.entry_time,req.date,attendence_type)
+                add_new_attendence(req)
 
-        return {"message":"seccuess","data":None,"status":True}
+@router.delete("/{att_id}")
+def delete_att(att_id:int):
+        delete_attendence(att_id)
+        return {"message":"","data":None,"Status":True}
 
-    except Exception as e:
-        return {"message":"an error happend"}
 
 

@@ -16,7 +16,7 @@ class Employees(Base):
     day_price = Column(DECIMAL, nullable=False)
     hour_price = Column(DECIMAL, nullable=False)
     extra_hours_price = Column(DECIMAL, nullable=False)
-    daly_work_hours = Column(Integer, nullable=False)
+    daily_work_hours = Column(Integer, nullable=False)
     vacation_days = Column(Integer, nullable=False) #allowed yearly vacation days
     is_active = Column(Boolean,nullable=False)
     allowed_late = Column(DECIMAL,nullable=False)
@@ -37,15 +37,20 @@ class Employees(Base):
     def to_dict(self):
         return {
             "id":self.id,
-            "name":self.name,
+            "fullname":self.fullname,
             "job_title":self.job_title,
             "phone":self.phone,
+            "email":self.email,
             "dues":self.dues,
-            "role":self.roles_tab.role_name if self.roles_tab else None,
+            "salary_type":self.salary_type,
             "daly_work_hours":self.daly_work_hours,
             "extra_hours_price":self.extra_hours_price,
             "hour_price":self.hour_price,
             "day_price":self.day_price,
-            "month_price":self.month_price,
-            "vacation_days":self.vacation_days
+            "monthly_price":self.month_price,
+            "vacation_days":self.vacation_days,
+            "is_active":self.is_active,
+            "allowed_late":self.allowed_late,
+            "min_extratime":self.min_extraTime
+            
         }
