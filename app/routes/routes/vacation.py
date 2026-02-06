@@ -22,7 +22,6 @@ def update_vacation(vac:UpdateVacationBaseModel):
     update_vacation(vac)
     return {"message":"","data":None,"status":True}
 
-
 @router.delete("/")
 def delete_vac(id:int):
     delete_vacation(id)
