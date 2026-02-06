@@ -1,7 +1,5 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from fastapi import Depends
-from app.db.session import get_db
 from app.models.attendence import Attendence
 from app.models.types.attendenceTypes import AttendanceType
 from app.services.vacation_service import get_emp_all_vacations
@@ -11,20 +9,20 @@ from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
 from datetime import datetime,date
 from dateutil.relativedelta import relativedelta
 
-def att_stat(emp_id,start,end,db:Session=Depends(get_db)):
+def att_stat(emp_id,start,end,db:Session):
     emp = db.get(Employees,emp_id)
     if not emp :
         raise EmployeeNotFound("employee not found")
     
     salary_type = emp.salary_type
-    diff = relativedelta(start,end)
+    diff = relativedelta(end,start)
     att = {
         "month_price":emp.monthly_price,
         "day_price":emp.day_price,
         "hour_price":emp.hour_price,
         "salaryType":emp.salary_type,
         "duration":{
-            "months":diff.month,
+            "months":diff.months,
             "days":diff.days,
         },"attendance":{
             "days":0,
@@ -42,14 +40,14 @@ def att_stat(emp_id,start,end,db:Session=Depends(get_db)):
     res = db.scalars(
         select(Attendence)
             .where(
+                Attendence.employee_id == emp_id,
                 Attendence.date <= end,
                 Attendence.date >= start 
             )
-        ).all
-    if res :
-        expected_work = res[0].employee_tab.daily_work_hours
+        ).all()
+    expected_work = float(emp.daily_work_hours)
     all_days = dates_between_skip_friday(start,end)
-    all_vac = get_emp_all_vacations(emp_id)
+    all_vac = get_emp_all_vacations(emp_id,db)
     for a in res:
         b = True
         if a.date in all_days:
@@ -76,14 +74,14 @@ def att_stat(emp_id,start,end,db:Session=Depends(get_db)):
                     att["attendance"]["days"]  +=1
             elif a.attendence_type == AttendanceType.PAID_VACATION:
                 att["paid_vacation"] +=1
-            elif a.attendence_type == AttendanceType.PAID_VACATION:
+            elif a.attendence_type == AttendanceType.Not_PAID_VACATION:
                 att["not_paid_vacation"] +=1
             all_days.remove(a.date)
 
         else:
             for vac in all_vac:
                 if  a.date >= vac.start_date and a.date <= vac.end_date:
-                    if vac.is_is_paid:
+                    if vac.is_paid:
                         att["paid_vacation"] +=1
                         b = False
                     else:

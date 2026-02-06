@@ -1,14 +1,10 @@
-from fastapi import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from app.db.session import get_db
 from sqlalchemy.exc import SQLAlchemyError
-from app.models.settings import Settings
 from app.models.employees import Employees
 from app.models.attendence import Attendence
 from app.models.vacation import Vacation
 from app.schemas.attendenceBaseModel import AttendenceBaseModel
-from app.exceptions.db_exceptions.noEntryTimeFound import NoEntryTimeFound
 from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
 from app.models.types.attendenceTypes import AttendanceType
 from datetime import datetime,time,timedelta,date
@@ -18,7 +14,7 @@ from datetime import datetime,time,timedelta,date
 
 
 
-def get_attendence(emp_id,date,db:Session=Depends(get_db)):
+def get_attendence(emp_id,date,db:Session):
 
     att = db.scalars(
         select(Attendence)
@@ -35,8 +31,8 @@ def get_attendance_type(
     emp_id: int,
     entry_time: time,
     exit_time: time | None,
-    attendence_type:int,
-    db: Session = Depends(get_db)
+    attendence_type:int | None,
+    db: Session
 ):
     
     if attendence_type in [AttendanceType.Absent,AttendanceType.Sick_Leave] :
@@ -64,34 +60,40 @@ def get_attendance_type(
         exit_dt = datetime.combine(today, exit_time)
 
         worked_time = exit_dt - entry_dt
-        expected_work  = timedelta(hours=emp.daily_work_hours)
+        expected_work  = timedelta(hours=float(emp.daily_work_hours))
         diff = worked_time - expected_work  # timedelta
 
-        if diff > emp.min_extraTime:
+        if diff > timedelta(hours=float(emp.min_extraTime)):
             return AttendanceType.OVERTIME  # OVERTIME
 
-        if diff < timedelta(0) and abs(diff) > emp.allowed_late:
+        if diff < timedelta(0) and abs(diff) > timedelta(hours=float(emp.allowed_late)):
             return AttendanceType.LATE  # LATE
 
     return AttendanceType.Presnt  # Presnt
 
 
-def update_attendence(att:Attendence,data:AttendenceBaseModel,db:Session=Depends(get_db)):
+def update_attendence(att:Attendence,data:AttendenceBaseModel,db:Session):
         
-        for key,val in data.model_dump():
-            setattr(Attendence,key,val)
+        for key,val in data.model_dump(exclude_unset=True).items():
+            setattr(att,key,val)
 
         db.commit()
         db.refresh(att)
 
-def add_new_attendence(data:AttendenceBaseModel,db:Session=Depends(get_db)):
+def add_new_attendence(data:AttendenceBaseModel,db:Session):
 
-    new_att = Attendence(employee_id=data.employee_id,entry_time=data.entry_time,exit_time=data.exit_time,date=date,attendence_type=data.attendence_type)
+    new_att = Attendence(
+        employee_id=data.employee_id,
+        entry_time=data.entry_time,
+        exit_time=data.exit_time,
+        date=data.date,
+        attendence_type=data.attendence_type or AttendanceType.Presnt,
+    )
     db.add(new_att)
     db.commit()
     db.refresh(new_att)
 
-def get_employee_attendence(id:int,start:date,end:date,db:Session=Depends(get_db)):
+def get_employee_attendence(id:int,start:date,end:date,db:Session):
     return db.scalars(
         select(Attendence).where(
             Attendence.employee_id==id,
@@ -99,19 +101,18 @@ def get_employee_attendence(id:int,start:date,end:date,db:Session=Depends(get_db
             Attendence.date <= end )
     ).all()
 
-def get_employees_attendence(d:date,db:Session=Depends(get_db)):
+def get_employees_attendence(d:date,db:Session):
     return db.scalars(
         select(Attendence).where(
             Attendence.date==d )
     ).all()
 
 
-def delete_attendence(id:int,db:Session=Depends(get_db)):
+def delete_attendence(id:int,db:Session):
     att = db.get(Attendence,id)
     if att:
         db.delete(att)
         db.commit()
-        db.refresh(att)
 
 
 

@@ -1,8 +1,8 @@
-from app.routes.routes.attendence import att_router
-from app.routes.routes.employee import emp_router
-from app.routes.routes.payment import pay_router
-from app.routes.routes.stat import stat_router
-from app.routes.routes.vacation import vac_router
+from app.routes.routes.attendence import router as att_router
+from app.routes.routes.employee import router as emp_router
+from app.routes.routes.payment import router as pay_router
+from app.routes.routes.stat import router as stat_router
+from app.routes.routes.vacation import router as vac_router
 from fastapi import APIRouter
 
 

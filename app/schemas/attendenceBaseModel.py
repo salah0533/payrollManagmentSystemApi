@@ -18,13 +18,13 @@ class AttendenceBaseModel(BaseModel):
         return self
 
 class DataRange(BaseModel):
-    start:time
-    end:time
+    start:date
+    end:date
 
     @model_validator(mode="after")
     def check_range(self):
         if self.start > self.end:
-            raise ValueError("sart date must be less than or equal to end date")
+            raise ValueError("start date must be less than or equal to end date")
         
         return self
         

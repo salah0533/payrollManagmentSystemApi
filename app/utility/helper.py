@@ -12,9 +12,9 @@ def hours_between(start_time, end_time):
 
 
 def dates_between_skip_friday(start: date, end: date):
-    return list(rrule(
+    return [d.date() for d in rrule(
         DAILY,
         dtstart=start,
         until=end,
         byweekday=(MO, TU, WE, TH, SA, SU)  # Friday excluded
-    ))
+    )]

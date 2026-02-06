@@ -43,14 +43,14 @@ class Employees(Base):
             "email":self.email,
             "dues":self.dues,
             "salary_type":self.salary_type,
-            "daly_work_hours":self.daly_work_hours,
+            "daily_work_hours":self.daily_work_hours,
             "extra_hours_price":self.extra_hours_price,
             "hour_price":self.hour_price,
             "day_price":self.day_price,
-            "monthly_price":self.month_price,
+            "monthly_price":self.monthly_price,
             "vacation_days":self.vacation_days,
             "is_active":self.is_active,
             "allowed_late":self.allowed_late,
-            "min_extratime":self.min_extraTime
+            "min_extraTime":self.min_extraTime
             
         }
