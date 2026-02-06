@@ -22,8 +22,8 @@ def get_emp_att(id:int,dates:DataRange=Depends()):
 def add_attendence(req:AttendenceBaseModel):
 
         att = get_attendence(req.employee_id,req.date) if req.employee_id else None
-
-        req.attendence_type =  get_attendance_type(req.employee_id,req.entry_time,req.exit_time,req.attendence_type) 
+        salary_type = att.employee_tab.salary_type
+        req.attendence_type = 0 if salary_type==2 else  get_attendance_type(req.employee_id,req.entry_time,req.exit_time,req.attendence_type)
 
 
         if att:

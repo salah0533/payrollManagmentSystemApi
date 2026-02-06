@@ -7,7 +7,7 @@ class VacationBaseModel(BaseModel):
     start_date:date
     end_date:date
     vacation_type:int
-
+    vacation_status:int
 
 class UpdateVacationBaseModel(BaseModel):
     id:int
@@ -15,3 +15,4 @@ class UpdateVacationBaseModel(BaseModel):
     start_date:date
     end_date:date
     vacation_type:int
+    vacation_status:int

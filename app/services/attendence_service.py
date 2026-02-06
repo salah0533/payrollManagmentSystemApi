@@ -10,18 +10,12 @@ from app.models.vacation import Vacation
 from app.schemas.attendenceBaseModel import AttendenceBaseModel
 from app.exceptions.db_exceptions.noEntryTimeFound import NoEntryTimeFound
 from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
+from app.models.types.attendenceTypes import AttendanceType
 from datetime import datetime,time,timedelta,date
-from enum import IntEnum
 
 
-class AttendanceType(IntEnum):
-    Presnt = 0
-    LATE = 1
-    Absent=2
-    OVERTIME = 3
-    PAID_VACATION = 4
-    Not_PAID_VACATION = 5
-    Sick_Leave = 6
+
+
 
 
 def get_attendence(emp_id,date,db:Session=Depends(get_db)):

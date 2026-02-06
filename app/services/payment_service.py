@@ -3,8 +3,22 @@ from app.db.session import get_db
 from fastapi import Depends
 from sqlalchemy import select
 from app.models.payments import Payments
+from app.models.employees import Employees
+from app.services.stat_service import att_stat
+from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
 from app.schemas.paymentsBaseModel import PaymentBaseModel,UpdatePaymentBaseModel
 from app.exceptions.db_exceptions.paymentNotFound import PaymentNotFound
+from datetime import date
+from dateutil.relativedelta import relativedelta
+
+def get_emp_att_payment(emp_id,start:date,end:date,db:Session=Depends(get_db)):
+    emp = db.get(Employees,emp_id)
+    if not emp:
+        raise EmployeeNotFound("employee not found")
+    
+    res = att_stat(emp_id,start,end)
+    return res
+    
 
 def get_employee_payments(emp_id:int,db:Session=Depends(get_db)):
     try:

@@ -10,7 +10,7 @@ class Vacation(Base):
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
     vacation_type = Column(Integer,ForeignKey("vacation_types.id"), nullable=False)
-    status = Column(Integer,ForeignKey("vacation_status.id"),nullable=False)
+    vacation_status = Column(Integer,ForeignKey("vacation_status.id"),nullable=False)
     is_paid = Column(Boolean,nullable=False)
 
     vacation_types_tab = relationship("VacationTypes",back_populates="vacation_tab")
