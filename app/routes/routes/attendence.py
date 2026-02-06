@@ -36,6 +36,8 @@ def add_attendence(req:AttendenceBaseModel,db: Session = Depends(get_db)):
         else:
                 add_new_attendence(req,db)
 
+        return {"message":"","data":None,"status":True}
+
 @router.delete("/{att_id}")
 def delete_att(att_id:int,db: Session = Depends(get_db)):
         delete_attendence(att_id,db)
