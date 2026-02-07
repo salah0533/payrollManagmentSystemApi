@@ -6,23 +6,24 @@ class Employees(Base):
     __tablename__ = "employees"
 
     id = Column(Integer,primary_key=True,index=True)
-    name = Column(String(50) , nullable=False)
-    role_id = Column(Integer,ForeignKey("roles.id"),nullable=False)
+    fullname = Column(String(50) , nullable=False)
     job_title = Column(String, nullable=False)
     phone = Column(String(14),nullable=False)
+    email = Column(String(50))
     dues = Column(DECIMAL, nullable=False)
-    daly_work_hours = Column(Integer, nullable=False)
-    extra_hours_price = Column(DECIMAL, nullable=False)
-    hour_price = Column(DECIMAL, nullable=False)
+    salary_type = Column(Integer,ForeignKey("salary_type.id"),nullable=False)
+    monthly_price = Column(DECIMAL, nullable=False)
     day_price = Column(DECIMAL, nullable=False)
-    month_price = Column(DECIMAL, nullable=False)
+    hour_price = Column(DECIMAL, nullable=False)
+    extra_hours_price = Column(DECIMAL, nullable=False)
+    daily_work_hours = Column(Integer, nullable=False)
     vacation_days = Column(Integer, nullable=False) #allowed yearly vacation days
-    auto_attendence = Column(Boolean,nullable=False)
     is_active = Column(Boolean,nullable=False)
+    allowed_late = Column(DECIMAL,nullable=False)
+    min_extraTime = Column(DECIMAL,nullable=False) # not paid
     
-    roles_tab = relationship("Roles",back_populates="employee_tab")
 
-    attendence_tab = relationship("Attendence",back_populates="attendence",
+    attendence_tab = relationship("Attendence",back_populates="employee_tab",
                              cascade="all, delete-orphan")
     
     payment_tab = relationship("Payments",back_populates="employee_tab",
@@ -30,20 +31,26 @@ class Employees(Base):
     
     vacation_tab = relationship("Vacation",back_populates="employee_tab",
                              cascade="all, delete-orphan")
+    salary_type_tab = relationship("SalaryType",back_populates="employee_tab")
 
     
     def to_dict(self):
         return {
             "id":self.id,
-            "name":self.name,
+            "fullname":self.fullname,
             "job_title":self.job_title,
             "phone":self.phone,
+            "email":self.email,
             "dues":self.dues,
-            "role":self.roles_tab.role_name if self.roles_tab else None,
-            "daly_work_hours":self.daly_work_hours,
+            "salary_type":self.salary_type,
+            "daily_work_hours":self.daily_work_hours,
             "extra_hours_price":self.extra_hours_price,
             "hour_price":self.hour_price,
             "day_price":self.day_price,
-            "month_price":self.month_price,
-            "vacation_days":self.vacation_days
+            "monthly_price":self.monthly_price,
+            "vacation_days":self.vacation_days,
+            "is_active":self.is_active,
+            "allowed_late":self.allowed_late,
+            "min_extraTime":self.min_extraTime
+            
         }

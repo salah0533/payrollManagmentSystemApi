@@ -9,5 +9,9 @@ class VacationTypes(Base):
 
     vacation_tab = relationship("Vacation",back_populates="vacation_types_tab")
 
+# 0 - yearly
+# 1 - sickleave
+# 2 - ofcial holidays
+# 3 - vacation
     
     

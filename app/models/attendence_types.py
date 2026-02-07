@@ -9,5 +9,10 @@ class AttendenceTypes(Base):
 
     attendence_tab = relationship("Attendence",back_populates="attendence_types_tab")
 
-
-    
+# 0 - present
+# 1 - late
+# 2 - absent
+# 3 - extratime
+# 4 - paid vacation
+# 5 - not paid vacation
+# 6 - sickleave

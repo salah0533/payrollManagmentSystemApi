@@ -10,7 +10,6 @@ class Attendence(Base):
     exit_time = Column(Time, nullable=True)
     date = Column(Date, nullable=False)
     attendence_type = Column(Integer,ForeignKey("attendence_types.id"), nullable=False)
-    att_hours = Column(DECIMAL,nullable=False)
     
     attendence_types_tab = relationship("AttendenceTypes",back_populates="attendence_tab")
     employee_tab = relationship("Employees",back_populates="attendence_tab")
