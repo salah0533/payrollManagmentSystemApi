@@ -8,8 +8,8 @@ from fastapi import APIRouter
 
 routers = APIRouter()
 
-routers.include_router(att_router,"/attendance",tags=["attendance"])
-routers.include_router(emp_router,"/employee",tags=["employee"])
-routers.include_router(pay_router,"/payment",tags=["payment"])
-routers.include_router(stat_router,"/stat",tags=["stat"])
-routers.include_router(vac_router,"/vacation",tags=["vacation"])
+routers.include_router(att_router,prefix="/attendance",tags=["attendance"])
+routers.include_router(emp_router,prefix="/employee",tags=["employee"])
+routers.include_router(pay_router,prefix="/payment",tags=["payment"])
+routers.include_router(stat_router,prefix="/stat",tags=["stat"])
+routers.include_router(vac_router,prefix="/vacation",tags=["vacation"])

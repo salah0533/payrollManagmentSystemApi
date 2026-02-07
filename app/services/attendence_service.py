@@ -11,9 +11,6 @@ from datetime import datetime,time,timedelta,date
 
 
 
-
-
-
 def get_attendence(emp_id,date,db:Session):
 
     att = db.scalars(
@@ -24,7 +21,6 @@ def get_attendence(emp_id,date,db:Session):
         )
     ).one_or_none()
     return att
-
 
 
 def get_attendance_type(

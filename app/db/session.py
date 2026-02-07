@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.services.envvalues import get_env_value
+from app.utility.envvalues import get_env_value
 
 DATABASE_URL = get_env_value("DATABASE_URL")
 
