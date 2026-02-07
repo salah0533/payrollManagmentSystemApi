@@ -3,11 +3,13 @@ from app.models.vacation import Vacation
 from sqlalchemy.orm import Session
 from app.exceptions.db_exceptions.noVacationFound import NoVacationFound
 from sqlalchemy import select
+from datetime import date
 
 def get_all_vacations(db:Session):
-
+    today = date.today()
     return db.scalars(
         select(Vacation)
+        .where(Vacation.end_date >= today)
     ).all()
 
 def get_employee_vacations(id:int,db:Session):
@@ -65,4 +67,5 @@ def delete_vacation(id:int,db:Session):
         db.commit()
     except Exception as e:
         raise e
+    
     
