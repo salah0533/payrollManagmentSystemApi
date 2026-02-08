@@ -89,12 +89,18 @@ def add_new_attendence(data:AttendenceBaseModel,db:Session):
     db.commit()
     db.refresh(new_att)
 
-def get_employee_attendence(id:int,start:date,end:date,db:Session):
+def get_employee_attendence_by_date(id:int,start:date,end:date,db:Session):
     return db.scalars(
         select(Attendence).where(
             Attendence.employee_id==id,
             Attendence.date >= start,
             Attendence.date <= end )
+    ).all()
+
+def get_employee_attendence(id:int,db:Session):
+    return db.scalars(
+        select(Attendence).where(
+            Attendence.employee_id==id)
     ).all()
 
 def get_employees_attendence(d:date,db:Session):

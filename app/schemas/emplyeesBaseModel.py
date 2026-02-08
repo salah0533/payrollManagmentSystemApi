@@ -5,7 +5,6 @@ from typing import Optional
 class NewEmployeeBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    id :int
     fullname :str
     job_title : str
     phone : str
@@ -25,7 +24,7 @@ class NewEmployeeBase(BaseModel):
 class UpdateEmployeeBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    id :Optional[int]=None
+    id :int
     fullname :Optional[str]=None
     job_title :Optional[str]=None
     phone :Optional[str]=None

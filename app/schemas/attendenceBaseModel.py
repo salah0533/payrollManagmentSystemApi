@@ -4,7 +4,7 @@ from typing import Optional
 
 
 class AttendenceBaseModel(BaseModel):
-    employee_id: Optional[int]=None
+    employee_id: int
     date: date
     entry_time:time
     exit_time:Optional[time]=None
