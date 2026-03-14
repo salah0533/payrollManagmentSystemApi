@@ -12,11 +12,14 @@ def get_all_vacations(db:Session):
         .where(Vacation.end_date >= today)
     ).all()
 
-def get_employee_vacations(id:int,db:Session):
+def get_employee_vacations(id:int,start,end,db:Session):
 
     return db.scalars(
         select(Vacation)
-        .where(Vacation.employee_id==id)
+        .where(Vacation.employee_id==id,
+               Vacation.start_date >= start,
+               Vacation.end_date <= end
+               )
     ).all()
 
 def get_emp_all_vacations(emp_id:int,db:Session):

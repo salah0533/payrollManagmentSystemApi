@@ -6,7 +6,7 @@ from typing import Optional
 class AttendenceBaseModel(BaseModel):
     employee_id: int
     date: date
-    entry_time:time
+    entry_time:Optional[time]=None
     exit_time:Optional[time]=None
     attendence_type:Optional[int]=None
 
@@ -28,3 +28,5 @@ class DataRange(BaseModel):
         
         return self
         
+
+

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.services.payment_service import get_emp_att_payment, add_payments, update_payment, delete_payment
+from app.services.payment_service import get_emp_att_payment, add_payments, update_payment, delete_payment ,get_employee_payments as get_employee_payments_srv
 from datetime import date
 from app.schemas.paymentsBaseModel import PaymentBaseModel,UpdatePaymentBaseModel
 from sqlalchemy.orm import Session
@@ -7,11 +7,15 @@ from app.db.session import get_db
 
 router = APIRouter()
 
-@router.get("/{emp_id}/{start}/{end}")
-def get_employee_payments(emp_id:int,start:date,end:date,db: Session = Depends(get_db)):
+@router.get("/att/{emp_id}/{start}/{end}")
+def get_employee_att_payments(emp_id:int,start:date,end:date,db: Session = Depends(get_db)):
     res = get_emp_att_payment(emp_id,start,end,db)
     return {"message":"","data":res,"status":True}
 
+@router.get("/{emp_id}/{start}/{end}")
+def get_employee_payments(emp_id:int,start:date,end:date,db: Session = Depends(get_db)):
+    res = get_employee_payments_srv(emp_id,start,end,db)
+    return {"message":"","data":res,"status":True}
 
 @router.put("/")
 def add_new_payment(new_payment:PaymentBaseModel,db: Session = Depends(get_db)):
