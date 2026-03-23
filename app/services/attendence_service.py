@@ -28,6 +28,7 @@ def get_attendance_type(
     entry_time: time,
     exit_time: time | None,
     attendence_type:int | None,
+    att_date:date,
     db: Session
 ):
     
@@ -38,31 +39,33 @@ def get_attendance_type(
     if not emp:
         raise EmployeeNotFound("employee not found")
 
-    today = date.today()
-
     vacation = db.execute(
         select(Vacation)
-        .where(Vacation.employee_id == emp_id)
-        .order_by(Vacation.end_date.desc())
-        .limit(1)
+        .where(
+            Vacation.employee_id == emp_id,
+            Vacation.start_date <= att_date,
+            Vacation.end_date >= att_date
+        )
     ).scalar_one_or_none()
 
-    if vacation and vacation.is_paid:
-        if vacation.start_date <= today <= vacation.end_date:
-            return AttendanceType.PAID_VACATION  # PAID_VACATION
+    if vacation:
+        if vacation.is_paid and vacation.vacation_status==1:
+            return AttendanceType.PAID_VACATION
+        else:
+            return AttendanceType.Not_PAID_VACATION
 
+    today = date.today()
     if exit_time:
         entry_dt = datetime.combine(today, entry_time)
         exit_dt = datetime.combine(today, exit_time)
 
         worked_time = exit_dt - entry_dt
         expected_work  = timedelta(hours=float(emp.daily_work_hours))
-        diff = worked_time - expected_work  # timedelta
-
-        if diff > timedelta(hours=float(emp.min_extraTime)):
+        
+        if worked_time > expected_work + timedelta(minutes=float(emp.min_extraTime)):
             return AttendanceType.OVERTIME  # OVERTIME
 
-        if diff < timedelta(0) and abs(diff) > timedelta(hours=float(emp.allowed_late)):
+        if worked_time < expected_work - timedelta(minutes=float(emp.allowed_late)):
             return AttendanceType.LATE  # LATE
 
     return AttendanceType.Presnt  # Presnt
@@ -83,7 +86,7 @@ def add_new_attendence(data:AttendenceBaseModel,db:Session):
         entry_time=data.entry_time,
         exit_time=data.exit_time,
         date=data.date,
-        attendence_type=data.attendence_type or AttendanceType.Presnt,
+        attendence_type=data.attendence_type or  AttendanceType.Presnt,
     )
     db.add(new_att)
     db.commit()

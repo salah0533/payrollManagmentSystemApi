@@ -9,6 +9,12 @@ def get_all_vacations(db:Session):
     today = date.today()
     return db.scalars(
         select(Vacation)
+    ).all()
+
+def get_all_current_vacations(db:Session):
+    today = date.today()
+    return db.scalars(
+        select(Vacation)
         .where(Vacation.end_date >= today)
     ).all()
 
@@ -21,6 +27,15 @@ def get_employee_vacations(id:int,start,end,db:Session):
                Vacation.end_date <= end
                )
     ).all()
+
+def overlab_check(id:int,start,end,db:Session):
+    return db.scalars(
+    select(Vacation)
+    .where(
+        Vacation.employee_id == id,
+        Vacation.start_date <= end,
+        Vacation.end_date >= start
+    )).all()
 
 def get_emp_all_vacations(emp_id:int,db:Session):
 

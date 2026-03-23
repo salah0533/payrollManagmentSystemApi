@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.schemas.attendenceBaseModel import AttendenceBaseModel,DataRange
 from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence,update_attendence,get_employee_attendence_by_date,get_employee_attendence,get_employees_attendence,delete_attendence
-from datetime import date as Date
+from datetime import time,date as Date
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 
@@ -33,9 +33,12 @@ def add_attendence(req:AttendenceBaseModel,db: Session = Depends(get_db)):
                 req.entry_time,
                 req.exit_time,
                 req.attendence_type,
+                req.date,
                 db,
         )
 
+        if req.attendence_type  == 2 :
+                req.entry_time = time(0,0,0)
         if att:
                 update_attendence(att,req,db)
         else:

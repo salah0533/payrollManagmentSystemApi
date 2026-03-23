@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select,desc
 from app.models.payments import Payments
 from app.models.employees import Employees
 from app.services.stat_service import att_stat
@@ -31,10 +31,17 @@ def get_employee_payments(emp_id,start:date,end:date,db:Session):
         ).all()
     except Exception as e:
         raise e
-    
+
+def get_last_att_date(emp_id:int,db:Session):
+    return db.scalar(
+        select(Payments.end)
+        .where( Payments.payment_type==3)
+        .order_by(desc(Payments.end))
+        .limit(1)
+    )
 def add_payments(pay:PaymentBaseModel,db:Session):
     try:
-        new_payments = Payments(employee_id=pay.employee_id,date=pay.date,amount=pay.amount,payment_type=pay.payment_type,description=pay.description)
+        new_payments = Payments(employee_id=pay.employee_id,date=pay.date,amount=pay.amount,payment_type=pay.payment_type,start=pay.start,end=pay.end,description=pay.description)
         db.add(new_payments)
         db.commit()
         db.refresh(new_payments)

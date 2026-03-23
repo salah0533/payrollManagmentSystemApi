@@ -9,3 +9,20 @@ router = APIRouter()
 def get_payment_types(db:Session=Depends(get_db)):
     data = get_payment_types_srv(db)
     return {"message":"","data":data,"status":True}
+
+    # {
+    #   "payment_type": "payment",
+    #   "id": 0
+    # },
+    # {
+    #   "payment_type": "bonus",
+    #   "id": 1
+    # },
+    # {
+    #   "payment_type": "deduction",
+    #   "id": 2
+    # },
+    # {
+    #   "payment_type": "attendence",
+    #   "id": 3
+    # }
