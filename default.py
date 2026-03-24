@@ -43,12 +43,14 @@ def upgrade() -> None:
     op.bulk_insert(
         attendance_types,
         [
-            {"id":0,"attendence_type": "present"},
-            {"id":1,"attendence_type": "late"},
-            {"id":2,"attendence_type": "vacation"},
-            {"id":3,"attendence_type": "absent"},
-            {"id":4,"attendence_type": "extra_work"}
-        ],
+            {"id": 0, "attendence_type": "present"},
+            {"id": 1, "attendence_type": "late"},
+            {"id": 2, "attendence_type": "absent"},
+            {"id": 3, "attendence_type": "overtime"},
+            {"id": 4, "attendence_type": "paid_vacation"},
+            {"id": 5, "attendence_type": "not_paid_vacation"},
+            {"id": 6, "attendence_type": "sick_leave"},
+        ]
     )
     op.bulk_insert(
         payment_types,
@@ -78,7 +80,7 @@ def upgrade() -> None:
         vacation_statuses,
         [
             {"id":0,"vacation_status": "pending"},
-            {"id":1,"vacation_status": "proved"},
+            {"id":1,"vacation_status": "approved"},
             {"id":2,"vacation_status": "rejected"},
             {"id":3,"vacation_status": "canceled"}
         ],

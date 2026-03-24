@@ -60,20 +60,24 @@ def att_stat(emp_id,start,end,db:Session):
                     entry_time = datetime.combine(date.today(),a.entry_time)
                     exit_time = datetime.combine(date.today(),a.exit_time)
                     att["attendance"]["hours"] +=  (exit_time - entry_time).total_seconds() / 3600
-
             elif a.attendence_type == AttendanceType.Absent:
                 att["absent"] +=1
             elif a.attendence_type == AttendanceType.LATE:
                 att["late"] += expected_work -  hours_between(a.entry_time , a.exit_time)
+                att["present"] += 1
                 if salary_type==1:
                     att["attendance"]["days"]  +=1
-
             elif a.attendence_type == AttendanceType.OVERTIME:
                 att["overtime"] += hours_between(a.entry_time , a.exit_time) - expected_work
+                att["present"] += 1
                 if salary_type==1:
                     att["attendance"]["days"]  +=1
             elif a.attendence_type == AttendanceType.PAID_VACATION:
                 att["paid_vacation"] +=1
+                if salary_type==1:
+                    att["attendance"]["days"] +=1
+                elif salary_type==2:
+                    att["attendance"]["hours"] += expected_work
             elif a.attendence_type == AttendanceType.Not_PAID_VACATION:
                 att["not_paid_vacation"] +=1
             all_days.remove(a.date)

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from app.models.types.attendenceTypes import AttendanceType
 from app.schemas.attendenceBaseModel import AttendenceBaseModel,DataRange
 from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence,update_attendence,get_employee_attendence_by_date,get_employee_attendence,get_employees_attendence,delete_attendence
 from datetime import time,date as Date
@@ -26,7 +27,6 @@ def get_emp_att(id:int,start:Date,end:Date,db: Session = Depends(get_db)):
 
 @router.put("/")
 def add_attendence(req:AttendenceBaseModel,db: Session = Depends(get_db)):
-
         att = get_attendence(req.employee_id,req.date,db) if req.employee_id else None
         req.attendence_type = get_attendance_type(
                 req.employee_id,
@@ -36,8 +36,7 @@ def add_attendence(req:AttendenceBaseModel,db: Session = Depends(get_db)):
                 req.date,
                 db,
         )
-
-        if req.attendence_type  == 2 :
+        if req.attendence_type  == AttendanceType.Absent :
                 req.entry_time = time(0,0,0)
         if att:
                 update_attendence(att,req,db)

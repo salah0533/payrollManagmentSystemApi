@@ -9,6 +9,27 @@ class AttendenceTypes(Base):
 
     attendence_tab = relationship("Attendence",back_populates="attendence_types_tab")
 
+
+    # {
+    #   "attendence_type": "present",
+    #   "id": 0
+    # },
+    # {
+    #   "attendence_type": "late",
+    #   "id": 1
+    # },
+    # {
+    #   "attendence_type": "vacation",
+    #   "id": 2
+    # },
+    # {
+    #   "attendence_type": "absent",
+    #   "id": 3
+    # },
+    # {
+    #   "attendence_type": "extra_work",
+    #   "id": 4
+    # }
 # 0 - present
 # 1 - late
 # 2 - absent
