@@ -2,13 +2,13 @@ from app.schemas.vacationBaseModel import VacationBaseModel,UpdateVacationBaseMo
 from app.models.vacation import Vacation
 from sqlalchemy.orm import Session
 from app.exceptions.db_exceptions.noVacationFound import NoVacationFound
-from sqlalchemy import select
+from sqlalchemy import select,extract
 from datetime import date
 
-def get_all_vacations(db:Session):
-    today = date.today()
+def get_all_vacations(year:int,db:Session):
     return db.scalars(
         select(Vacation)
+        .where(extract("year",Vacation.start_date)==year)
     ).all()
 
 def get_all_current_vacations(db:Session):

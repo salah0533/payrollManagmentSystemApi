@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from datetime import date as d
+from pydantic import BaseModel, field_validator
+from datetime import datetime, date as d
 from typing import Optional
 
 class PaymentBaseModel(BaseModel):
@@ -8,8 +8,7 @@ class PaymentBaseModel(BaseModel):
     payment_type:int
     amount:float
     description:str
-    start:Optional[d]=None
-    end:Optional[d]=None
+    year_month:Optional[str]=None
 
 class UpdatePaymentBaseModel(BaseModel):
     id:int
@@ -18,3 +17,14 @@ class UpdatePaymentBaseModel(BaseModel):
     payment_type:Optional[int]
     amount:Optional[float]
     description:Optional[str]
+
+class MonthInput(BaseModel):
+    month: str
+
+    @field_validator("month")
+    def validate_month(cls, v):
+        try:
+            datetime.strptime(v, "%Y-%m")
+        except ValueError:
+            raise ValueError("Invalid format. Use YYYY-MM")
+        return v

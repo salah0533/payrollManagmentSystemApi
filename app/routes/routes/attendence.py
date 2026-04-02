@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.models.types.attendenceTypes import AttendanceType
 from app.schemas.attendenceBaseModel import AttendenceBaseModel,DataRange
-from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence,update_attendence,get_employee_attendence_by_date,get_employee_attendence,get_employees_attendence,delete_attendence
+from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence,update_attendence,get_employee_attendence_by_date,get_employee_attendence,get_employees_attendence,delete_attendence,mark_all_emp_present
 from datetime import time,date as Date
 from sqlalchemy.orm import Session
 from app.db.session import get_db
@@ -45,6 +45,11 @@ def add_attendence(req:AttendenceBaseModel,db: Session = Depends(get_db)):
 
         return {"message":"","data":None,"status":True}
 
+@router.put("/mark_all_present")
+def mark_all_present(db:Session=Depends(get_db)):
+        data = mark_all_emp_present(db)
+        return {"message":"","data":data,"status":True}
+        
 @router.delete("/{att_id}")
 def delete_att(att_id:int,db: Session = Depends(get_db)):
         delete_attendence(att_id,db)

@@ -8,3 +8,4 @@ from app.models.settings import Settings
 from app.models.vacation import Vacation
 from app.models.vacation_types import VacationTypes
 from app.models.vacation_status import VacationStatus
+from app.models.annual_vacation import AnnualVacations

@@ -13,14 +13,14 @@ def att_stat(emp_id,start,end,db:Session):
     emp = db.get(Employees,emp_id)
     if not emp :
         raise EmployeeNotFound("employee not found")
-    
     salary_type = emp.salary_type
     diff = relativedelta(end,start)
     att = {
+        "salary_type":emp.salary_type_tab.salary_type,
         "month_price":emp.monthly_price,
         "day_price":emp.day_price,
         "hour_price":emp.hour_price,
-        "salaryType":emp.salary_type,
+        "overtime_price":emp.extra_hours_price,
         "duration":{
             "months":diff.months,
             "days":diff.days,
@@ -54,7 +54,7 @@ def att_stat(emp_id,start,end,db:Session):
 
             if a.attendence_type == AttendanceType.Presnt:
                 att["present"] +=1
-                if salary_type==1:
+                if salary_type in [0,1]:
                     att["attendance"]["days"]  +=1
                 elif salary_type==2:
                     entry_time = datetime.combine(date.today(),a.entry_time)
@@ -65,16 +65,16 @@ def att_stat(emp_id,start,end,db:Session):
             elif a.attendence_type == AttendanceType.LATE:
                 att["late"] += expected_work -  hours_between(a.entry_time , a.exit_time)
                 att["present"] += 1
-                if salary_type==1:
+                if salary_type in [0,1]:
                     att["attendance"]["days"]  +=1
             elif a.attendence_type == AttendanceType.OVERTIME:
                 att["overtime"] += hours_between(a.entry_time , a.exit_time) - expected_work
                 att["present"] += 1
-                if salary_type==1:
+                if salary_type in [0,1]:
                     att["attendance"]["days"]  +=1
             elif a.attendence_type == AttendanceType.PAID_VACATION:
                 att["paid_vacation"] +=1
-                if salary_type==1:
+                if salary_type in [0,1]:
                     att["attendance"]["days"] +=1
                 elif salary_type==2:
                     att["attendance"]["hours"] += expected_work

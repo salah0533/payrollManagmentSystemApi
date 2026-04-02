@@ -1,6 +1,7 @@
 
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
+from datetime import date
 
 class NewEmployeeBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -15,12 +16,11 @@ class NewEmployeeBase(BaseModel):
     hour_price : float 
     day_price : Optional[float]=0
     monthly_price : Optional[float]=Field(0, alias="month_price")
-    vacation_days : int
     salary_type:int
     is_active:bool
     allowed_late:float
     min_extraTime:float
-
+    joined:date
 class UpdateEmployeeBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -35,8 +35,8 @@ class UpdateEmployeeBase(BaseModel):
     hour_price :Optional[float]=None
     day_price :Optional[float]=None
     monthly_price :Optional[float]=Field(None, alias="month_price")
-    vacation_days :Optional[int]=None
     salary_type:Optional[int]=None
     is_active:Optional[bool]=None
     allowed_late:Optional[float]=None
     min_extraTime:Optional[float]=None
+    joined:Optional[date]=None
