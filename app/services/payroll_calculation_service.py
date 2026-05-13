@@ -14,9 +14,11 @@ from app.models.attendance_payroll import (
     PayrollDiscrepancy,
     PayrollPeriod,
 )
+from app.models.auth import User
 from app.models.employees import Employees
 from app.models.types.vacationStatus import VacationStatuses
 from app.models.vacation import Vacation
+from app.services.notification_service import NotificationService
 from app.services.policy_service import (
     WEEKDAY_NAMES,
     get_employee_compensation,
@@ -44,6 +46,73 @@ def _decimal(value, default: str = "0.00") -> Decimal:
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _get_employee_user_id(employee_id: int, db: Session) -> int | None:
+    return db.scalar(select(User.id).where(User.employee_id == employee_id, User.deleted_at.is_(None)))
+
+
+def _notify_payroll_backoffice_status(payroll: EmployeePayroll, db: Session) -> None:
+    service = NotificationService(db)
+    if payroll.status == "needs_review":
+        notification_type = "payroll_needs_review"
+        title = "Payroll needs review"
+        message = f"Payroll for employee #{payroll.employee_id} in period #{payroll.payroll_period_id} needs review."
+    elif payroll.status == "draft":
+        notification_type = "payroll_draft_ready"
+        title = "Payroll draft ready"
+        message = f"Payroll draft for employee #{payroll.employee_id} in period #{payroll.payroll_period_id} is ready."
+    else:
+        return
+
+    if service.notification_exists(
+        notification_type=notification_type,
+        entity_type="employee_payroll",
+        entity_id=payroll.id,
+    ):
+        return
+    service.notify_role(
+        role_codes=["hr", "admin"],
+        notification_type=notification_type,
+        title=title,
+        message=message,
+        entity_type="employee_payroll",
+        entity_id=payroll.id,
+        priority="normal",
+        skip_if_no_recipients=True,
+    )
+
+
+def _notify_employee_payroll_status(
+    *,
+    payroll: EmployeePayroll,
+    notification_type: str,
+    title: str,
+    message: str,
+    actor_user_id: int | None,
+    db: Session,
+) -> None:
+    user_id = _get_employee_user_id(payroll.employee_id, db)
+    if user_id is None:
+        return
+    service = NotificationService(db)
+    if service.notification_exists(
+        notification_type=notification_type,
+        entity_type="employee_payroll",
+        entity_id=payroll.id,
+        user_id=user_id,
+    ):
+        return
+    service.notify_user(
+        user_id=user_id,
+        notification_type=notification_type,
+        title=title,
+        message=message,
+        entity_type="employee_payroll",
+        entity_id=payroll.id,
+        actor_user_id=actor_user_id,
+        priority="normal",
+    )
 
 
 def _get_period_bounds(target_date: date) -> tuple[date, date]:
@@ -382,6 +451,22 @@ def _upsert_discrepancy(
     )
     db.add(discrepancy)
     db.flush()
+    notification_service = NotificationService(db)
+    if not notification_service.notification_exists(
+        notification_type="payroll_discrepancy_detected",
+        entity_type="payroll_discrepancy",
+        entity_id=discrepancy.id,
+    ):
+        notification_service.notify_role(
+            role_codes=["hr", "admin"],
+            notification_type="payroll_discrepancy_detected",
+            title="Payroll discrepancy detected",
+            message=description,
+            entity_type="payroll_discrepancy",
+            entity_id=discrepancy.id,
+            priority="high",
+            skip_if_no_recipients=True,
+        )
     return discrepancy
 
 
@@ -530,6 +615,7 @@ def calculate_employee_payroll(
         user_id=created_by,
     )
     db.flush()
+    _notify_payroll_backoffice_status(payroll, db)
     return payroll
 
 
@@ -623,6 +709,14 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
         new_data_json={"status": payroll.status},
         user_id=approved_by,
     )
+    _notify_employee_payroll_status(
+        payroll=payroll,
+        notification_type="payroll_approved",
+        title="Payroll approved",
+        message=f"Your payroll for period #{payroll.payroll_period_id} was approved.",
+        actor_user_id=approved_by,
+        db=db,
+    )
     db.commit()
     db.refresh(payroll)
     return payroll
@@ -654,6 +748,14 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
         old_data_json={"status": old_status},
         new_data_json={"status": payroll.status},
         user_id=paid_by,
+    )
+    _notify_employee_payroll_status(
+        payroll=payroll,
+        notification_type="payroll_paid",
+        title="Payroll paid",
+        message=f"Your payroll for period #{payroll.payroll_period_id} was marked as paid.",
+        actor_user_id=paid_by,
+        db=db,
     )
     db.commit()
     db.refresh(payroll)

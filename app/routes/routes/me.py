@@ -8,11 +8,13 @@ from app.db.session import get_db
 from app.dependencies.auth import require_authenticated_user, require_permissions
 from app.exceptions.base_exception import BadRequestException, ConflictException
 from app.models.auth import User
+from app.schemas.notifications import NotificationActionResultRead, NotificationUnreadCountRead
 from app.models.types.vacationStatus import VacationStatuses
 from app.schemas.attendance_payroll import AttendanceDayRead, EmployeePayrollRead
 from app.schemas.user import SelfAttendanceActionRequest, SelfVacationRequestCreate
 from app.schemas.vacationBaseModel import VacationBaseModel
 from app.services.attendance_calculation_service import create_attendance_event, get_attendance_days
+from app.services.notification_service import NotificationService
 from app.services.user_service import get_employee_or_404, serialize_employee
 from app.services.vacation_service import add_vacation, get_emp_all_vacations, overlab_check
 
@@ -81,6 +83,7 @@ def request_my_vacation(
             is_paid=payload.is_paid,
         ),
         db,
+        actor=current_user,
     )
     return api_success(status_code=201)
 
@@ -140,3 +143,67 @@ def check_out_myself(
     db: Session = Depends(get_db),
 ):
     return _handle_self_attendance_action(event_type="check_out", payload=payload, current_user=current_user, db=db)
+
+
+@router.get("/notifications")
+def get_my_notifications(
+    unread_only: bool = False,
+    archived: bool = False,
+    include_expired: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(require_permissions("notifications.read_own")),
+    db: Session = Depends(get_db),
+):
+    service = NotificationService(db)
+    return api_success(
+        service.get_user_notifications(
+            user_id=current_user.id,
+            unread_only=unread_only,
+            is_archived=archived,
+            include_expired=include_expired,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get("/notifications/unread-count")
+def get_my_notification_unread_count(
+    current_user: User = Depends(require_permissions("notifications.read_own")),
+    db: Session = Depends(get_db),
+):
+    unread_count = NotificationService(db).get_unread_count(user_id=current_user.id)
+    return api_success(NotificationUnreadCountRead(unread_count=unread_count))
+
+
+@router.post("/notifications/{notification_id}/read")
+def mark_my_notification_read(
+    notification_id: int,
+    current_user: User = Depends(require_permissions("notifications.read_own")),
+    db: Session = Depends(get_db),
+):
+    notification = NotificationService(db).mark_as_read(user_id=current_user.id, notification_id=notification_id)
+    db.commit()
+    return api_success(notification)
+
+
+@router.post("/notifications/read-all")
+def mark_all_my_notifications_read(
+    current_user: User = Depends(require_permissions("notifications.read_own")),
+    db: Session = Depends(get_db),
+):
+    updated = NotificationService(db).mark_all_as_read(user_id=current_user.id)
+    db.commit()
+    return api_success(NotificationActionResultRead(updated=updated, status="marked_all_as_read"))
+
+
+@router.post("/notifications/{notification_id}/archive")
+def archive_my_notification(
+    notification_id: int,
+    current_user: User = Depends(require_permissions("notifications.read_own")),
+    db: Session = Depends(get_db),
+):
+    notification = NotificationService(db).archive_notification(user_id=current_user.id, notification_id=notification_id)
+    db.commit()
+    return api_success(notification)

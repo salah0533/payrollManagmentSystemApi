@@ -49,7 +49,7 @@ def add_vacation_by_id(
         raise ForbiddenException("You are not allowed to add this value")
     if overlab_check(vac.employee_id,vac.start_date,vac.end_date,db) != []:
         raise ConflictException("Vacation already exists in these dates", code="vacation_overlap")
-    add_vacation(vac,db)
+    add_vacation(vac,db, actor=current_user)
     return api_success(status_code=201)
 
 @router.post("/")
@@ -58,7 +58,7 @@ def update_vacation_by_id(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_hr_or_admin),
 ):
-    update_vacation(vac,db)
+    update_vacation(vac,db, actor=current_user)
     return api_success()
 
 @router.delete("/{id}")

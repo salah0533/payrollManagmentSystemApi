@@ -3,6 +3,7 @@ from app.routes.routes.auth import router as auth_router
 from app.routes.routes.attendence import router as att_router
 from app.routes.routes.employee import router as emp_router
 from app.routes.routes.me import router as me_router
+from app.routes.routes.notifications import router as notifications_router
 from app.routes.routes.payment import router as pay_router
 from app.routes.routes.payroll import router as payroll_router
 from app.routes.routes.stat import router as stat_router
@@ -24,6 +25,7 @@ routers.include_router(audit_router,prefix="/audit",tags=["audit"])
 routers.include_router(auth_router,prefix="/auth",tags=["auth"])
 routers.include_router(users_router,prefix="/users",tags=["users"])
 routers.include_router(me_router,prefix="/me",tags=["me"])
+routers.include_router(notifications_router,prefix="/notifications",tags=["notifications"])
 routers.include_router(att_router,prefix="/attendance",tags=["attendance"])
 routers.include_router(emp_router,prefix="/employee",tags=["employee"])
 routers.include_router(pay_router,prefix="/payment",tags=["payment"])

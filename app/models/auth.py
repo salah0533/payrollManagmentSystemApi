@@ -24,6 +24,8 @@ class User(Base):
 
     employee = relationship("Employees", back_populates="user_account")
     user_roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan")
+    sent_notifications = relationship("Notification", back_populates="actor_user", foreign_keys="Notification.actor_user_id")
+    notification_recipients = relationship("NotificationRecipient", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def active_role_codes(self) -> list[str]:

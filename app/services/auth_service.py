@@ -7,6 +7,7 @@ from app.core.security import create_access_token, create_refresh_token, decode_
 from app.exceptions.base_exception import BadRequestException, ForbiddenException, UnauthorizedException
 from app.models.auth import User
 from app.schemas.auth import ChangePasswordRequest, TokenResponse
+from app.services.notification_service import NotificationService
 from app.services.audit_service import save_audit_log
 from app.services.user_service import get_user_by_identifier, get_user_or_404, serialize_auth_me
 
@@ -76,6 +77,16 @@ def change_password(current_user: User, payload: ChangePasswordRequest, db: Sess
         entity_type="User",
         entity_id=current_user.id,
         user_id=current_user.id,
+    )
+    NotificationService(db).notify_user(
+        user_id=current_user.id,
+        notification_type="password_changed",
+        title="Password changed",
+        message="Your password was changed successfully.",
+        entity_type="user",
+        entity_id=current_user.id,
+        actor_user_id=current_user.id,
+        priority="normal",
     )
     db.commit()
 

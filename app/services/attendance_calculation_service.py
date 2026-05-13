@@ -9,6 +9,7 @@ from app.models.employees import Employees
 from app.models.types.vacationStatus import VacationStatuses
 from app.models.types.vacationTypes import VacationTypes
 from app.models.vacation import Vacation
+from app.services.notification_service import NotificationService
 from app.services.policy_service import WEEKDAY_NAMES, get_employee_schedule, save_audit_log
 
 
@@ -54,6 +55,69 @@ def _get_employee(employee_id: int, db: Session) -> Employees:
     if not employee.is_active:
         raise BadRequestException("Inactive employees cannot create attendance")
     return employee
+
+
+def _maybe_notify_attendance_issue(
+    *,
+    employee: Employees,
+    day: AttendanceDay,
+    previous_status: str | None,
+    db: Session,
+) -> None:
+    user = employee.user_account
+    if not user or user.deleted_at is not None or not user.is_active:
+        return
+
+    service = NotificationService(db)
+    work_date = day.work_date.isoformat()
+
+    if day.status == "incomplete":
+        if day.check_in_time and not day.check_out_time:
+            notification_type = "attendance_missing_checkout"
+            title = "Missing check-out"
+            message = f"Your attendance for {work_date} is missing a check-out."
+        elif day.check_out_time and not day.check_in_time:
+            notification_type = "attendance_missing_checkin"
+            title = "Missing check-in"
+            message = f"Your attendance for {work_date} is missing a check-in."
+        else:
+            return
+
+        if service.notification_exists(
+            notification_type=notification_type,
+            entity_type="attendance_day",
+            entity_id=day.id,
+            user_id=user.id,
+        ):
+            return
+        service.notify_user(
+            user_id=user.id,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+            entity_type="attendance_day",
+            entity_id=day.id,
+            priority="normal",
+        )
+        return
+
+    if day.status == "late" and previous_status != "late":
+        if service.notification_exists(
+            notification_type="attendance_late",
+            entity_type="attendance_day",
+            entity_id=day.id,
+            user_id=user.id,
+        ):
+            return
+        service.notify_user(
+            user_id=user.id,
+            notification_type="attendance_late",
+            title="Late attendance",
+            message=f"Your check-in on {work_date} was marked as late.",
+            entity_type="attendance_day",
+            entity_id=day.id,
+            priority="normal",
+        )
 
 
 def _get_vacation(employee_id: int, work_date: date, db: Session) -> Vacation | None:
@@ -209,6 +273,8 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
     schedule = get_employee_schedule(employee_id, work_date, db)
     vacation = _get_vacation(employee_id, work_date, db)
     day = _get_or_create_attendance_day(employee_id, work_date, db)
+    employee = _get_employee(employee_id, db)
+    previous_status = day.status
     day.work_schedule_id = schedule.id
 
     day_start, day_end = _day_bounds(work_date)
@@ -313,6 +379,7 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         event.attendance_day_id = day.id
         db.add(event)
 
+    _maybe_notify_attendance_issue(employee=employee, day=day, previous_status=previous_status, db=db)
     _sync_payroll_after_attendance_change(day, db, trigger_reason)
     return day
 

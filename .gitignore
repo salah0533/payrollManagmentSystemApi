@@ -2,6 +2,9 @@
 venv
 *.pyc
 *.db
-alembic
 alembic.ini
 alembic/*
+!alembic/env.py
+!alembic/versions/
+alembic/versions/*
+!alembic/versions/e8b1f26ec8a1_add_in_app_notifications.py

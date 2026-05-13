@@ -24,3 +24,4 @@ from app.models.vacation_types import VacationTypes
 from app.models.vacation_status import VacationStatus
 from app.models.annual_vacation import AnnualVacations
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
+from app.models.notifications import Notification, NotificationRecipient

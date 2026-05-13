@@ -10,6 +10,7 @@ from app.models.employees import Employees
 from app.schemas.auth import AuthMeEmployee, AuthMeResponse
 from app.schemas.user import EmployeeRead, PermissionRead, RoleRead, UserCreateRequest, UserRead, UserResetPasswordRequest, UserUpdateRequest
 from app.services.audit_service import save_audit_log, serialize_model
+from app.services.notification_service import NotificationService
 
 
 class ResourceConflictException(ConflictException):
@@ -259,6 +260,28 @@ def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None =
         new_data_json={"username": user.username, "email": user.email, "roles": user.active_role_codes},
         user_id=actor.id if actor else None,
     )
+    notification_service = NotificationService(db)
+    notification_service.notify_user(
+        user_id=user.id,
+        notification_type="account_created",
+        title="Account created",
+        message="Your employee management account is ready to use.",
+        entity_type="user",
+        entity_id=user.id,
+        actor_user_id=actor.id if actor else None,
+        priority="normal",
+    )
+    if user.must_change_password:
+        notification_service.notify_user(
+            user_id=user.id,
+            notification_type="must_change_password",
+            title="Password change required",
+            message="You must change your password before accessing the rest of the app.",
+            entity_type="user",
+            entity_id=user.id,
+            actor_user_id=actor.id if actor else None,
+            priority="high",
+        )
     db.commit()
     return serialize_user(user)
 
@@ -266,6 +289,7 @@ def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None =
 def update_user(user_id: int, payload: UserUpdateRequest, db: Session, *, actor: User | None = None) -> UserRead:
     user = get_user_or_404(user_id, db)
     old_data = serialize_model(user, fields=("username", "email", "employee_id", "is_active", "must_change_password"))
+    old_must_change_password = user.must_change_password
     values = payload.model_dump(exclude_unset=True)
 
     if "username" in values and values["username"] is not None:
@@ -298,6 +322,17 @@ def update_user(user_id: int, payload: UserUpdateRequest, db: Session, *, actor:
         new_data_json=serialize_model(user, fields=("username", "email", "employee_id", "is_active", "must_change_password")),
         user_id=actor.id if actor else None,
     )
+    if not old_must_change_password and user.must_change_password:
+        NotificationService(db).notify_user(
+            user_id=user.id,
+            notification_type="must_change_password",
+            title="Password change required",
+            message="An administrator requires you to change your password before continuing.",
+            entity_type="user",
+            entity_id=user.id,
+            actor_user_id=actor.id if actor else None,
+            priority="high",
+        )
     db.commit()
     return serialize_user(get_user_or_404(user.id, db))
 
@@ -413,5 +448,28 @@ def reset_password(user_id: int, payload: UserResetPasswordRequest, db: Session,
         new_data_json={"must_change_password": payload.must_change_password},
         user_id=actor.id if actor else None,
     )
+    notification_service = NotificationService(db)
+    if payload.must_change_password:
+        notification_service.notify_user(
+            user_id=user.id,
+            notification_type="must_change_password",
+            title="Password reset",
+            message="Your password was reset. You must change it at your next login.",
+            entity_type="user",
+            entity_id=user.id,
+            actor_user_id=actor.id if actor else None,
+            priority="high",
+        )
+    else:
+        notification_service.notify_user(
+            user_id=user.id,
+            notification_type="password_changed",
+            title="Password reset",
+            message="Your password was reset by an administrator.",
+            entity_type="user",
+            entity_id=user.id,
+            actor_user_id=actor.id if actor else None,
+            priority="normal",
+        )
     db.commit()
     return serialize_user(get_user_or_404(user.id, db))
