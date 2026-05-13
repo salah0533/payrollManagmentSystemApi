@@ -62,7 +62,7 @@ def _get_vacation(employee_id: int, work_date: date, db: Session) -> Vacation | 
             Vacation.employee_id == employee_id,
             Vacation.start_date <= work_date,
             Vacation.end_date >= work_date,
-            Vacation.vacation_status == int(VacationStatuses.aproved),
+            Vacation.vacation_status == int(VacationStatuses.approved),
         )
     )
 
@@ -258,7 +258,7 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         day.status = "weekly_off"
         day.expected_work_minutes = 0
     elif vacation and not events:
-        if vacation.vacation_type == int(VacationTypes.sick_leave):
+        if vacation.vacation_type == int(VacationTypes.sick):
             day.status = "sick_leave"
             day.normal_paid_minutes = expected_work_minutes if vacation.is_paid else 0
             day.unpaid_minutes = 0 if vacation.is_paid else expected_work_minutes

@@ -5,6 +5,7 @@ from sqlalchemy.orm import relationship
 class SalaryType(Base):
     __tablename__ = "salary_type"
     id = Column(Integer,primary_key=True,index=True)
+    code = Column(String(50), nullable=True, unique=True)
     salary_type = Column(String(25), nullable=False)
 
     employee_tab = relationship("Employees",back_populates="salary_type_tab")

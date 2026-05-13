@@ -4,8 +4,9 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.utility.reference_codes import ATTENDANCE_EVENT_TYPE_CODES, PAYROLL_ADJUSTMENT_TYPE_CODES
 
-ATTENDANCE_EVENT_TYPES = {"check_in", "break_start", "break_end", "check_out", "manual_event"}
+ATTENDANCE_EVENT_TYPES = set(ATTENDANCE_EVENT_TYPE_CODES)
 PAYROLL_FINAL_STATUSES = {"approved", "paid", "locked"}
 
 
@@ -126,11 +127,17 @@ class WorkScheduleRead(WorkSchedulePayload):
 
 class PayrollPolicyPayload(BaseModel):
     name: str = "default"
+    payroll_cycle: str = "monthly"
+    minimum_overtime_minutes: int = 30
+    allowed_late_minutes: int = 0
     default_currency: str = "USD"
     significant_change_threshold: Decimal = Decimal("1.00")
     paid_vacation_counts_for_daily: bool = True
     overtime_enabled: bool = True
+    late_makeup_enabled: bool = True
     late_deduction_enabled: bool = True
+    auto_recalculate_draft_payroll: bool = True
+    lock_payroll_after_payment: bool = True
     holidays_json: list[str] = Field(default_factory=list)
 
 
@@ -154,7 +161,7 @@ class PayrollAdjustmentCreate(BaseModel):
     @field_validator("adjustment_type")
     @classmethod
     def validate_adjustment_type(cls, value: str) -> str:
-        valid = {"bonus", "deduction", "correction"}
+        valid = set(PAYROLL_ADJUSTMENT_TYPE_CODES)
         if value not in valid:
             raise ValueError(f"adjustment_type must be one of {sorted(valid)}")
         return value

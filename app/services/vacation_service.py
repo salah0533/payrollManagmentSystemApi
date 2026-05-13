@@ -63,7 +63,7 @@ def add_vacation(vac:VacationBaseModel,db:Session):
         )
         db.add(new_vac)
         db.flush()
-        if vac.vacation_status == int(VacationStatuses.aproved):
+        if vac.vacation_status == int(VacationStatuses.approved):
             sync_vacation_with_payroll(vac.employee_id, vac.start_date, vac.end_date, db, reason="vacation_approved")
         db.commit()
         db.refresh(new_vac)
@@ -84,9 +84,9 @@ def update_vacation(updated_vac:UpdateVacationBaseModel,db:Session):
                 continue
             setattr(vac,key,val)
         db.flush()
-        if vac.vacation_status == int(VacationStatuses.aproved):
+        if vac.vacation_status == int(VacationStatuses.approved):
             sync_vacation_with_payroll(vac.employee_id, vac.start_date, vac.end_date, db, reason="vacation_approved")
-        elif old_status == int(VacationStatuses.aproved):
+        elif old_status == int(VacationStatuses.approved):
             sync_vacation_with_payroll(vac.employee_id, old_start, old_end, db, reason="vacation_rejected")
         db.commit()
         db.refresh(vac)

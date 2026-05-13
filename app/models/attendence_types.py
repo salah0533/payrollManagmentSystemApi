@@ -5,6 +5,7 @@ from sqlalchemy.orm import relationship
 class AttendenceTypes(Base):
     __tablename__ = "attendence_types"
     id = Column(Integer,primary_key=True,index=True)
+    code = Column(String(50), nullable=True, unique=True)
     attendence_type = Column(String(25), nullable=False)
 
     attendence_tab = relationship("Attendence",back_populates="attendence_types_tab")

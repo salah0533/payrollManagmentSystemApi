@@ -3,9 +3,14 @@ from enum import IntEnum
 
 
 class VacationTypes(IntEnum):
-    yearly_vacation=0
-    sick_leave=1
-    vacation=2
+    paid = 0
+    unpaid = 1
+    sick = 2
+    emergency = 3
+
+    yearly_vacation = 0
+    sick_leave = 2
+    vacation = 0
 
 
     # {

@@ -32,8 +32,8 @@ def get_used_vac_days(emp_id:int,db:Session):
         .where(
             Vacation.employee_id==emp_id,
             Vacation.is_paid.is_(True),
-            Vacation.vacation_status == VacationStatuses.aproved,
-            Vacation.vacation_type == VacationTypes.yearly_vacation
+            Vacation.vacation_status == VacationStatuses.approved,
+            Vacation.vacation_type == VacationTypes.paid
         )
         .group_by("year")
         .order_by("year")

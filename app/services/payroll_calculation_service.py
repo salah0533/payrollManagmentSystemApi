@@ -177,7 +177,8 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     unrecovered_late_minutes = max(0, summary["late_minutes"] + summary["early_leave_minutes"] - summary["late_makeup_minutes"])
     late_deduction_rate = _decimal(compensation.late_deduction_rate) if policy.late_deduction_enabled else Decimal("0.00")
     late_deduction_amount = _money(late_deduction_rate * Decimal(unrecovered_late_minutes))
-    overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(summary["overtime_minutes"])) if policy.overtime_enabled else Decimal("0.00")
+    payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
+    overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
 
     adjustments = _load_adjustments(payroll.id, db)
     bonus_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "bonus"), Decimal("0.00")))
@@ -195,6 +196,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "base_salary": str(base_salary),
         "normal_amount": str(normal_amount),
         "overtime_amount": str(overtime_amount),
+        "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
         "deduction_amount": str(deduction_amount),
         "late_deduction_amount": str(late_deduction_amount),
@@ -238,7 +240,8 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
             paid_day_equivalent += Decimal("1.00")
 
     normal_amount = _money(_decimal(compensation.daily_rate) * paid_day_equivalent)
-    overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(summary["overtime_minutes"])) if policy.overtime_enabled else Decimal("0.00")
+    payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
+    overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
     adjustments = _load_adjustments(payroll.id, db)
     bonus_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "bonus"), Decimal("0.00")))
     deduction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "deduction"), Decimal("0.00")))
@@ -254,6 +257,7 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "base_salary": "0.00",
         "normal_amount": str(normal_amount),
         "overtime_amount": str(overtime_amount),
+        "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
         "deduction_amount": str(deduction_amount),
         "adjustment_amount": str(correction_amount),
@@ -282,7 +286,8 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
     summary = _attendance_summary(days, 1)
 
     normal_amount = _money((_decimal(compensation.hourly_rate) / Decimal("60")) * Decimal(summary["normal_paid_minutes"]))
-    overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(summary["overtime_minutes"])) if policy.overtime_enabled else Decimal("0.00")
+    payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
+    overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
     adjustments = _load_adjustments(payroll.id, db)
     bonus_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "bonus"), Decimal("0.00")))
     deduction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "deduction"), Decimal("0.00")))
@@ -295,6 +300,7 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "base_salary": "0.00",
         "normal_amount": str(normal_amount),
         "overtime_amount": str(overtime_amount),
+        "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
         "deduction_amount": str(deduction_amount),
         "adjustment_amount": str(correction_amount),
@@ -421,7 +427,7 @@ def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: S
     vacations = db.scalars(
         select(Vacation).where(
             Vacation.employee_id == employee_id,
-            Vacation.vacation_status == int(VacationStatuses.aproved),
+            Vacation.vacation_status == int(VacationStatuses.approved),
             Vacation.start_date <= period.end_date,
             Vacation.end_date >= period.start_date,
         )
@@ -556,6 +562,7 @@ def recalculate_payroll_period(payroll_period_id: int, db: Session, created_by: 
 def sync_payroll_with_attendance_day(day: AttendanceDay, db: Session, trigger_reason: str = "attendance_change"):
     period = get_or_create_payroll_period_for_date(day.work_date, db)
     payroll = _get_employee_payroll(day.employee_id, period.id, db)
+    policy = get_or_create_payroll_policy(db)
 
     if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
         _upsert_discrepancy(
@@ -567,6 +574,9 @@ def sync_payroll_with_attendance_day(day: AttendanceDay, db: Session, trigger_re
             severity="high",
             db=db,
         )
+        return payroll
+
+    if not policy.auto_recalculate_draft_payroll:
         return payroll
 
     force_history = trigger_reason in {"attendance_correction", "vacation_approved", "vacation_rejected", "payroll_adjustment"}
@@ -624,7 +634,8 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
         raise HTTPException(status_code=404, detail="Employee payroll not found")
 
     old_status = payroll.status
-    payroll.status = "paid"
+    policy = get_or_create_payroll_policy(db)
+    payroll.status = "locked" if policy.lock_payroll_after_payment else "paid"
     payroll.paid_at = _utc_now()
     create_payroll_history_snapshot(
         payroll,
