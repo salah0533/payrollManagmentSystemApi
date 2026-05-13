@@ -1,8 +1,18 @@
+from datetime import datetime, time, timezone
+
 from fastapi import APIRouter, Depends
 from app.models.types.attendenceTypes import AttendanceType
 from app.schemas.attendenceBaseModel import AttendenceBaseModel,DataRange
+from app.schemas.attendance_payroll import AttendanceActionRequest, AttendanceCorrectionRequest
+from app.services.attendance_calculation_service import (
+        create_attendance_correction,
+        create_attendance_event,
+        get_attendance_day,
+        get_attendance_days,
+        recalculate_attendance_for_employee,
+)
 from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence, get_attendence_by_date,update_attendence,get_employee_attendence_by_date,get_employee_attendence,get_employees_attendence,delete_attendence,mark_all_emp_present
-from datetime import time,date as Date
+from datetime import date as Date
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 
@@ -59,6 +69,90 @@ def mark_all_present(db:Session=Depends(get_db)):
 def delete_att(att_id:int,db: Session = Depends(get_db)):
         delete_attendence(att_id,db)
         return {"message":"","data":None,"status":True}
+
+
+@router.post("/check-in")
+def check_in(req: AttendanceActionRequest, db: Session = Depends(get_db)):
+        event_time = req.event_time or datetime.now(timezone.utc)
+        event, day = create_attendance_event(
+                employee_id=req.employee_id,
+                event_type="check_in",
+                event_time=event_time,
+                db=db,
+                source=req.source,
+                note=req.note,
+                created_by=req.created_by,
+        )
+        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+
+
+@router.post("/break-start")
+def break_start(req: AttendanceActionRequest, db: Session = Depends(get_db)):
+        event_time = req.event_time or datetime.now(timezone.utc)
+        event, day = create_attendance_event(
+                employee_id=req.employee_id,
+                event_type="break_start",
+                event_time=event_time,
+                db=db,
+                source=req.source,
+                note=req.note,
+                created_by=req.created_by,
+        )
+        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+
+
+@router.post("/break-end")
+def break_end(req: AttendanceActionRequest, db: Session = Depends(get_db)):
+        event_time = req.event_time or datetime.now(timezone.utc)
+        event, day = create_attendance_event(
+                employee_id=req.employee_id,
+                event_type="break_end",
+                event_time=event_time,
+                db=db,
+                source=req.source,
+                note=req.note,
+                created_by=req.created_by,
+        )
+        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+
+
+@router.post("/check-out")
+def check_out(req: AttendanceActionRequest, db: Session = Depends(get_db)):
+        event_time = req.event_time or datetime.now(timezone.utc)
+        event, day = create_attendance_event(
+                employee_id=req.employee_id,
+                event_type="check_out",
+                event_time=event_time,
+                db=db,
+                source=req.source,
+                note=req.note,
+                created_by=req.created_by,
+        )
+        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+
+
+@router.post("/manual-correction")
+def manual_correction(req: AttendanceCorrectionRequest, db: Session = Depends(get_db)):
+        correction, day = create_attendance_correction(req, db)
+        return {"message":"","data":{"correction":correction,"attendance_day":day},"status":True}
+
+
+@router.get("/day/{employee_id}/{work_date}")
+def get_attendance_day_view(employee_id: int, work_date: Date, db: Session = Depends(get_db)):
+        day = get_attendance_day(employee_id, work_date, db)
+        return {"message":"","data":day,"status":True}
+
+
+@router.get("/employee/{employee_id}/{start_date}/{end_date}")
+def get_employee_attendance_days(employee_id: int, start_date: Date, end_date: Date, db: Session = Depends(get_db)):
+        days = get_attendance_days(employee_id, start_date, end_date, db)
+        return {"message":"","data":days,"status":True}
+
+
+@router.post("/recalculate/{employee_id}/{start_date}/{end_date}")
+def recalculate_attendance(employee_id: int, start_date: Date, end_date: Date, db: Session = Depends(get_db)):
+        days = recalculate_attendance_for_employee(employee_id, start_date, end_date, db)
+        return {"message":"","data":{"employee_id":employee_id,"recalculated_days":len(days)},"status":True}
 
 
 

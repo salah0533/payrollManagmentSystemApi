@@ -3,12 +3,14 @@ from app.routes.router import routers
 from fastapi.middleware.cors import CORSMiddleware
 from sqladmin import Admin, ModelView
 from app.db.session import engine
+from app.db.base import Base
 import app.models  
 
 from app.models.employees import Employees
 
 app = FastAPI()
 admin = Admin(app, engine)
+Base.metadata.create_all(bind=engine)
 
 
 origins = [
