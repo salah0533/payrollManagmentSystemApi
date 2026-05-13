@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.responses import api_success
 from app.dependencies.auth import require_permissions
 from app.db.session import get_db
 from app.models.auth import User
@@ -15,7 +16,7 @@ def list_employees(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("employees.read")),
 ):
-    return {"message":"","data":get_employees(db),"status":True}
+    return api_success(get_employees(db))
 
 @router.get("/{id}")
 def get_employee_by_id(
@@ -23,7 +24,7 @@ def get_employee_by_id(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("employees.read")),
 ):
-    return {"message":"","data":get_employee(id,db),"status":True}
+    return api_success(get_employee(id,db))
 
 @router.post("/")
 def create_employee(
@@ -31,7 +32,7 @@ def create_employee(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("employees.create")),
 ):
-    return {"message":"","data":add_employee(emp,db, actor=current_user),"status":True}
+    return api_success(add_employee(emp,db, actor=current_user), status_code=201)
 
 @router.delete("/{id}")
 def delete_employee_by_id(
@@ -40,7 +41,7 @@ def delete_employee_by_id(
     current_user: User = Depends(require_permissions("employees.delete")),
 ):
     delete_employee(id,db, actor=current_user)
-    return {"message":"","data":None,"status":True} 
+    return api_success()
 
 @router.put("/{id}")
 def update_employee_by_id(
@@ -49,5 +50,5 @@ def update_employee_by_id(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("employees.update")),
 ):
-    return {"message":"","data":update_employee(id,emp,db, actor=current_user),"status":True} 
+    return api_success(update_employee(id,emp,db, actor=current_user))
 

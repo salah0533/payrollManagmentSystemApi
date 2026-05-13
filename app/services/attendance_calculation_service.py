@@ -1,9 +1,9 @@
 from datetime import date, datetime, time, timedelta, timezone
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.exceptions.base_exception import BadRequestException, ForbiddenException, ResourceNotFoundException
 from app.models.attendance_payroll import AttendanceCorrection, AttendanceDay, AttendanceEvent
 from app.models.employees import Employees
 from app.models.types.vacationStatus import VacationStatuses
@@ -50,9 +50,9 @@ def _day_bounds(work_date: date) -> tuple[datetime, datetime]:
 def _get_employee(employee_id: int, db: Session) -> Employees:
     employee = db.get(Employees, employee_id)
     if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise ResourceNotFoundException("Employee")
     if not employee.is_active:
-        raise HTTPException(status_code=400, detail="Inactive employees cannot create attendance")
+        raise BadRequestException("Inactive employees cannot create attendance")
     return employee
 
 
@@ -98,7 +98,7 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
     vacation = _get_vacation(employee_id, work_date, db)
 
     if vacation:
-        raise HTTPException(status_code=400, detail="Employee is on approved vacation")
+        raise ForbiddenException("Employee is on approved vacation", code="employee_on_approved_vacation")
 
     day_start, day_end = _day_bounds(work_date)
     existing_events = db.scalars(
@@ -113,27 +113,27 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
 
     by_type = {item.event_type for item in existing_events}
     if event_type == "check_in" and "check_in" in by_type:
-        raise HTTPException(status_code=400, detail="Duplicate check-in is not allowed")
+        raise BadRequestException("Duplicate check-in is not allowed")
     if event_type == "break_start" and "break_start" in by_type:
-        raise HTTPException(status_code=400, detail="Duplicate break_start is not allowed")
+        raise BadRequestException("Duplicate break_start is not allowed")
     if event_type == "break_start" and "check_in" not in by_type:
-        raise HTTPException(status_code=400, detail="Cannot start break before check-in")
+        raise BadRequestException("Cannot start break before check-in")
     if event_type == "break_end" and "break_end" in by_type:
-        raise HTTPException(status_code=400, detail="Duplicate break_end is not allowed")
+        raise BadRequestException("Duplicate break_end is not allowed")
     if event_type == "break_end" and "break_start" not in by_type:
-        raise HTTPException(status_code=400, detail="Cannot end break before break_start")
+        raise BadRequestException("Cannot end break before break_start")
     if event_type == "break_end":
         break_start_event = next((item for item in existing_events if item.event_type == "break_start"), None)
         if break_start_event and event_time <= break_start_event.event_time:
-            raise HTTPException(status_code=400, detail="break_end cannot be before break_start")
+            raise BadRequestException("break_end cannot be before break_start")
     if event_type == "check_out" and "check_in" not in by_type:
-        raise HTTPException(status_code=400, detail="Cannot check out before check-in")
+        raise BadRequestException("Cannot check out before check-in")
     if event_type == "check_out" and "check_out" in by_type:
-        raise HTTPException(status_code=400, detail="Duplicate check_out is not allowed")
+        raise BadRequestException("Duplicate check_out is not allowed")
     if event_type == "check_out":
         check_in_event = next((item for item in existing_events if item.event_type == "check_in"), None)
         if check_in_event and event_time <= check_in_event.event_time:
-            raise HTTPException(status_code=400, detail="check_out cannot be before check_in")
+            raise BadRequestException("check_out cannot be before check_in")
 
     if WEEKDAY_NAMES[work_date.weekday()] in {day.lower() for day in (schedule.weekly_off_days or [])}:
         return {"warning": "Attendance created on a weekly off day"}
@@ -152,7 +152,7 @@ def create_attendance_event(
 ):
     event_time = _normalize_event_time(event_time)
     if event_type not in ATTENDANCE_EVENT_FIELD_MAP and event_type != "manual_event":
-        raise HTTPException(status_code=400, detail="Invalid attendance event type")
+        raise BadRequestException("Invalid attendance event type")
 
     validate_attendance_event(employee_id, event_type, event_time, db)
     event = AttendanceEvent(
@@ -320,7 +320,7 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
 def recalculate_attendance_for_employee(employee_id: int, start_date: date, end_date: date, db: Session) -> list[AttendanceDay]:
     _get_employee(employee_id, db)
     if start_date > end_date:
-        raise HTTPException(status_code=400, detail="start_date must be before end_date")
+        raise BadRequestException("start_date must be before end_date")
 
     current = start_date
     days: list[AttendanceDay] = []

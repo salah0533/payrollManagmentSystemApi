@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import utc_now
+from app.exceptions.base_exception import ForbiddenException
 from app.models.auth import User
 from app.models.employees import Employees
 from app.schemas.user import EmployeeCreateRequest, EmployeeRead, EmployeeUpdateRequest, UserCreateRequest
 from app.services.audit_service import save_audit_log, serialize_model
+from app.services.user_service import ResourceConflictException, get_resource_or_404
 from app.services.user_service import create_user, serialize_employee
 
 
@@ -29,11 +30,10 @@ def get_employees(db: Session) -> list[EmployeeRead]:
 
 
 def get_employee(id: int, db: Session) -> EmployeeRead:
-    employee = db.scalar(
-        select(Employees).options(_employee_query()).where(Employees.id == id, Employees.deleted_at.is_(None))
+    employee = get_resource_or_404(
+        db.scalar(select(Employees).options(_employee_query()).where(Employees.id == id, Employees.deleted_at.is_(None))),
+        resource_name="Employee",
     )
-    if not employee:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
     return serialize_employee(employee)
 
 
@@ -122,7 +122,7 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
 
     if payload.create_user_account:
         if actor is None or "admin" not in set(actor.active_role_codes):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can create linked user accounts")
+            raise ForbiddenException("Only admins can create linked user accounts")
         create_user(
             UserCreateRequest(
                 username=payload.username or "",
@@ -152,9 +152,11 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
 
 
 def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Session, *, actor: User | None = None) -> EmployeeRead:
-    employee = db.scalar(select(Employees).options(_employee_query()).where(Employees.id == employee_id, Employees.deleted_at.is_(None)))
-    if not employee:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    employee = get_resource_or_404(
+        db.scalar(select(Employees).options(_employee_query()).where(Employees.id == employee_id, Employees.deleted_at.is_(None))),
+        resource_name="Employee",
+        identifier=employee_id,
+    )
 
     old_data = serialize_model(employee)
     _sync_employee_fields(employee, payload)
@@ -175,13 +177,15 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
 
 
 def delete_employee(id: int, db: Session, *, actor: User | None = None) -> None:
-    employee = db.scalar(select(Employees).options(_employee_query()).where(Employees.id == id, Employees.deleted_at.is_(None)))
-    if not employee:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    employee = get_resource_or_404(
+        db.scalar(select(Employees).options(_employee_query()).where(Employees.id == id, Employees.deleted_at.is_(None))),
+        resource_name="Employee",
+        identifier=id,
+    )
     if employee.user_account and employee.user_account.deleted_at is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Employee has a linked user account. Disable or unlink the account before deleting the employee.",
+        raise ResourceConflictException(
+            "Employee has a linked user account. Disable or unlink the account before deleting the employee.",
+            code="employee_has_linked_user_account",
         )
 
     old_data = serialize_model(employee)

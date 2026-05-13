@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import decode_token
 from app.db.session import get_db
+from app.exceptions.base_exception import ForbiddenException, UnauthorizedException
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
 
 
@@ -30,8 +31,8 @@ def _load_user(user_id: int, db: Session) -> User | None:
     )
 
 
-def _forbidden(detail: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+def _forbidden(detail: str) -> ForbiddenException:
+    return ForbiddenException(detail)
 
 
 def _ensure_password_change_allowed(user: User, request: Request) -> None:
@@ -47,9 +48,8 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    credentials_error = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+    credentials_error = UnauthorizedException(
+        "Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:

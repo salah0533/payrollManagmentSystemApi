@@ -1,8 +1,8 @@
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select,desc
 from app.models.payments import Payments
 from app.models.employees import Employees
+from app.exceptions.base_exception import ResourceNotFoundException
 from app.services.stat_service import att_stat
 from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
 from app.schemas.paymentsBaseModel import PaymentBaseModel,UpdatePaymentBaseModel
@@ -30,17 +30,14 @@ def get_all_payements(start:date,end:date,db:Session):
         ).all()
 
 def get_employee_payments(emp_id,start:date,end:date,db:Session):
-    try:
-        return db.scalars(
-            select(Payments)
-            .where(
-                Payments.employee_id==emp_id,
-                Payments.date >= start,
-                Payments.date <= end + timedelta(days=1)
-            )
-        ).all()
-    except Exception as e:
-        raise e
+    return db.scalars(
+        select(Payments)
+        .where(
+            Payments.employee_id==emp_id,
+            Payments.date >= start,
+            Payments.date <= end + timedelta(days=1)
+        )
+    ).all()
 
 def get_last_att_date(emp_id:int,db:Session):
     return db.scalar(
@@ -63,7 +60,7 @@ def add_payments(pay:PaymentBaseModel,start,end,db:Session):
 
         emp = db.get(Employees, pay.employee_id)
         if not emp:
-            raise HTTPException(status_code=404, detail="Employee not found")
+            raise EmployeeNotFound()
 
         INCOME_TYPES = [1, 3]
 
@@ -82,7 +79,7 @@ def update_payment(pay:UpdatePaymentBaseModel,db:Session):
 
     emp = db.get(Employees, exist_pay.employee_id)
     if not emp:
-        raise Exception("Employee not found")
+        raise ResourceNotFoundException("Employee")
 
     INCOME_TYPES = [1, 3]  # bonus, attendence
 
@@ -114,7 +111,7 @@ def delete_payment(pay_id: int, db: Session):
 
     emp = db.get(Employees, pay.employee_id)
     if not emp:
-        raise Exception("Employee not found")
+        raise ResourceNotFoundException("Employee")
 
     INCOME_TYPES = [1, 3]  # bonus, attendence
 

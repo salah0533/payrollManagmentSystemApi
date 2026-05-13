@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.exceptions.base_exception import ResourceNotFoundException
 from app.models.attendance_payroll import EmployeeCompensation, PayrollPolicy, WorkSchedule
 from app.models.employees import Employees
 from app.models.settings import Settings
@@ -139,7 +140,7 @@ def get_employee_compensation(employee_id: int, target_date: date, db: Session) 
 
     employee = db.get(Employees, employee_id)
     if not employee:
-        raise ValueError("employee not found")
+        raise ResourceNotFoundException("Employee")
 
     compensation = EmployeeCompensation(
         employee_id=employee_id,

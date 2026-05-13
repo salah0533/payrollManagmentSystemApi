@@ -1,15 +1,25 @@
 from __future__ import annotations
 
-from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import get_password_hash
+from app.exceptions.base_exception import BadRequestException, ConflictException, ResourceNotFoundException
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
 from app.models.employees import Employees
 from app.schemas.auth import AuthMeEmployee, AuthMeResponse
 from app.schemas.user import EmployeeRead, PermissionRead, RoleRead, UserCreateRequest, UserRead, UserResetPasswordRequest, UserUpdateRequest
 from app.services.audit_service import save_audit_log, serialize_model
+
+
+class ResourceConflictException(ConflictException):
+    pass
+
+
+def get_resource_or_404(resource, *, resource_name: str, identifier: int | None = None):
+    if not resource:
+        raise ResourceNotFoundException(resource_name, identifier)
+    return resource
 
 
 def _user_loader():
@@ -23,28 +33,31 @@ def _user_loader():
 
 
 def get_user_or_404(user_id: int, db: Session) -> User:
-    user = db.scalar(select(User).options(*_user_loader()).where(User.id == user_id, User.deleted_at.is_(None)))
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return user
+    return get_resource_or_404(
+        db.scalar(select(User).options(*_user_loader()).where(User.id == user_id, User.deleted_at.is_(None))),
+        resource_name="User",
+        identifier=user_id,
+    )
 
 
 def get_employee_or_404(employee_id: int, db: Session) -> Employees:
-    employee = db.scalar(select(Employees).where(Employees.id == employee_id, Employees.deleted_at.is_(None)))
-    if not employee:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
-    return employee
+    return get_resource_or_404(
+        db.scalar(select(Employees).where(Employees.id == employee_id, Employees.deleted_at.is_(None))),
+        resource_name="Employee",
+        identifier=employee_id,
+    )
 
 
 def get_role_or_404(role_id: int, db: Session) -> Role:
-    role = db.scalar(
+    return get_resource_or_404(
+        db.scalar(
         select(Role)
         .options(selectinload(Role.role_permissions).selectinload(RolePermission.permission))
         .where(Role.id == role_id)
+        ),
+        resource_name="Role",
+        identifier=role_id,
     )
-    if not role:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Role {role_id} not found")
-    return role
 
 
 def get_user_by_identifier(identifier: str, db: Session) -> User | None:
@@ -63,7 +76,7 @@ def _ensure_unique_username(username: str, db: Session, *, exclude_user_id: int 
     if exclude_user_id is not None:
         statement = statement.where(User.id != exclude_user_id)
     if db.scalar(statement):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists")
+        raise ResourceConflictException("Username already exists", code="username_already_exists")
 
 
 def _ensure_unique_email(email: str | None, db: Session, *, exclude_user_id: int | None = None) -> None:
@@ -73,7 +86,7 @@ def _ensure_unique_email(email: str | None, db: Session, *, exclude_user_id: int
     if exclude_user_id is not None:
         statement = statement.where(User.id != exclude_user_id)
     if db.scalar(statement):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
+        raise ResourceConflictException("Email already exists", code="email_already_exists")
 
 
 def _ensure_employee_link_available(employee_id: int | None, db: Session, *, exclude_user_id: int | None = None) -> None:
@@ -87,7 +100,10 @@ def _ensure_employee_link_available(employee_id: int | None, db: Session, *, exc
     if exclude_user_id is not None:
         statement = statement.where(User.id != exclude_user_id)
     if db.scalar(statement):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This employee already has an active user account")
+        raise ResourceConflictException(
+            "This employee already has an active user account",
+            code="employee_already_linked",
+        )
 
 
 def _serialize_permission(permission: Permission) -> PermissionRead:
@@ -199,15 +215,15 @@ def list_users(db: Session) -> list[UserRead]:
 def _get_role_assignments(role_ids: list[int], db: Session) -> list[Role]:
     roles = [get_role_or_404(role_id, db) for role_id in role_ids]
     if not roles:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one role is required")
+        raise BadRequestException("At least one role is required")
     return roles
 
 
 def _validate_employee_role_policy(employee_id: int | None, roles: list[Role]) -> None:
     if any(role.code == "employee" for role in roles) and employee_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="employee role requires the user to be linked to an employee profile",
+        raise BadRequestException(
+            "employee role requires the user to be linked to an employee profile",
+            code="employee_role_requires_profile",
         )
 
 
@@ -307,7 +323,7 @@ def _ensure_not_last_active_admin(user: User, db: Session) -> None:
     if "admin" not in role_codes:
         return
     if user.is_active and _count_active_admins(db, exclude_user_id=user.id) == 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate the last active admin")
+        raise ResourceConflictException("Cannot deactivate the last active admin", code="last_active_admin")
 
 
 def activate_user(user_id: int, db: Session, *, actor: User | None = None) -> UserRead:
@@ -360,11 +376,11 @@ def remove_role(user_id: int, role_id: int, db: Session, *, actor: User | None =
     user = get_user_or_404(user_id, db)
     mapping = next((item for item in user.user_roles if item.role_id == role_id), None)
     if not mapping:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role assignment not found")
+        raise ResourceNotFoundException("Role assignment")
     role = mapping.role or get_role_or_404(role_id, db)
 
     if role.code == "admin" and user.is_active and _count_active_admins(db, exclude_user_id=user.id) == 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove the last active admin role")
+        raise ResourceConflictException("Cannot remove the last active admin role", code="last_active_admin_role")
 
     remaining_roles = [item.role for item in user.user_roles if item.role_id != role_id and item.role is not None]
     _validate_employee_role_policy(user.employee_id, remaining_roles)

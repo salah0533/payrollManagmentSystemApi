@@ -1,5 +1,6 @@
-from fastapi import APIRouter,Depends,HTTPException,status
+from fastapi import APIRouter,Depends
 from sqlalchemy.orm import Session
+from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_hr_or_admin, require_self_or_permission
 from app.models.auth import User
@@ -15,7 +16,7 @@ def get_ann_vac(
     current_user: User = Depends(require_self_or_permission("employees.read", employee_param="emp_id")),
 ):
     data = get_ann_vac_svc(emp_id,db)
-    return {"message":"","data":data,"status":True}
+    return api_success(data)
 
 @router.get("/used_vac/{emp_id}")
 def used_vac_days(
@@ -28,11 +29,7 @@ def used_vac_days(
     for year, total in used:
         ann_vac[year]["used"] = total
 
-    return {
-        "message": "",
-        "data": ann_vac,
-        "status": True
-    }
+    return api_success(ann_vac)
 
 @router.put("/")
 def add(
@@ -41,7 +38,7 @@ def add(
     current_user: User = Depends(require_hr_or_admin),
 ):
     add_new_ann_vac_src(req,db)
-    return {"message":"","data":None,"status":True}
+    return api_success(status_code=201)
 
     
 @router.post("/")
@@ -51,7 +48,7 @@ def update(
     current_user: User = Depends(require_hr_or_admin),
 ):
     update_ann_vac(req,db)
-    return {"message":"","data":None,"status":True}
+    return api_success()
 
 @router.delete("/")
 def delete(
@@ -60,4 +57,4 @@ def delete(
     current_user: User = Depends(require_hr_or_admin),
 ):
     delete_ann_vac(req,db)
-    return {"message":"","data":None,"status":True}
+    return api_success()

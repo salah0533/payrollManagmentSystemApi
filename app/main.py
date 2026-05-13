@@ -1,8 +1,12 @@
 from fastapi import FastAPI
 from app.routes.router import routers
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.logging import configure_logging
+from app.core.responses import api_success
+from app.exceptions.handlers import register_exception_handlers
 import app.models  
 
+configure_logging()
 app = FastAPI()
 
 
@@ -20,7 +24,8 @@ app.add_middleware(
 
 
 app.include_router(routers)
+register_exception_handlers(app)
 
 @app.get("/")
 def root():
-    return {"message":"","data":None,"status":True}
+    return api_success()

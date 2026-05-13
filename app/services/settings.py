@@ -1,6 +1,7 @@
 from app.schemas.settingBaseModel import SettingsBaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from app.exceptions.base_exception import BadRequestException
 from app.models.settings import Settings
 
 
@@ -16,7 +17,7 @@ def update_settings(set:SettingsBaseModel,db:Session):
     setting = db.scalar(select(Settings))
 
     if not setting:
-        raise ValueError("Settings row does not exist")
+        raise BadRequestException("Settings row does not exist", code="settings_not_initialized")
     setting.entry_time = set.entryTime if set.entryTime else setting.entry_time
     setting.exit_time = set.exitTime if set.exitTime else setting.exit_time
     db.commit()

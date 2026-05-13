@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_permissions
 from app.models.attendance_payroll import AuditLog
@@ -23,4 +24,4 @@ def list_audit_logs(
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(max(1, min(limit, 500)))
     ).all()
-    return {"message": "", "data": [AuditLogRead.model_validate(row) for row in rows], "status": True}
+    return api_success([AuditLogRead.model_validate(row) for row in rows])

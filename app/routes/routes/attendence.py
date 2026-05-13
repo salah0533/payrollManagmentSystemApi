@@ -1,6 +1,7 @@
 from datetime import datetime, time, timezone
 
 from fastapi import APIRouter, Depends
+from app.core.responses import api_success
 from app.models.types.attendenceTypes import AttendanceType
 from app.schemas.attendenceBaseModel import AttendenceBaseModel,DataRange
 from app.schemas.attendance_payroll import AttendanceActionRequest, AttendanceCorrectionRequest
@@ -28,7 +29,7 @@ def get_emps_att(
         current_user: User = Depends(require_permissions("attendance.read_all")),
 ):
         res = get_employees_attendence(date,db)
-        return {"message":"","data":res,"status":True}
+        return api_success(res)
 
 @router.get("/emp/{id}")
 def get_emp_att(
@@ -37,7 +38,7 @@ def get_emp_att(
         current_user: User = Depends(require_self_or_permission("attendance.read_all", employee_param="id")),
 ):
         res = get_employee_attendence(id,db)
-        return {"message":"","data":res,"status":True}
+        return api_success(res)
 
 @router.get("/attbytim/{start}/{end}")
 def get_att_by_time(
@@ -47,7 +48,7 @@ def get_att_by_time(
         current_user: User = Depends(require_permissions("attendance.read_all")),
 ):
         res = get_attendence_by_date(start,end,db)
-        return {"message":"","data":res,"status":True}
+        return api_success(res)
 
 @router.get("/emp/{id}/{start}/{end}")
 def get_emp_att(
@@ -58,7 +59,7 @@ def get_emp_att(
         current_user: User = Depends(require_self_or_permission("attendance.read_all", employee_param="id")),
 ):
         res = get_employee_attendence_by_date(id,start,end,db)
-        return {"message":"","data":res,"status":True}
+        return api_success(res)
         
 
 @router.put("/")
@@ -83,7 +84,7 @@ def add_attendence(
         else:
                 add_new_attendence(req,db)
 
-        return {"message":"","data":None,"status":True}
+        return api_success()
 
 @router.put("/mark_all_present")
 def mark_all_present(
@@ -91,7 +92,7 @@ def mark_all_present(
         current_user: User = Depends(require_permissions("attendance.correct")),
 ):
         data = mark_all_emp_present(db)
-        return {"message":"","data":data,"status":True}
+        return api_success(data)
         
 @router.delete("/{att_id}")
 def delete_att(
@@ -100,7 +101,7 @@ def delete_att(
         current_user: User = Depends(require_permissions("attendance.correct")),
 ):
         delete_attendence(att_id,db)
-        return {"message":"","data":None,"status":True}
+        return api_success()
 
 
 @router.post("/check-in")
@@ -119,7 +120,7 @@ def check_in(
                 note=req.note,
                 created_by=current_user.id,
         )
-        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+        return api_success({"event":event,"attendance_day":day}, status_code=201)
 
 
 @router.post("/break-start")
@@ -138,7 +139,7 @@ def break_start(
                 note=req.note,
                 created_by=current_user.id,
         )
-        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+        return api_success({"event":event,"attendance_day":day}, status_code=201)
 
 
 @router.post("/break-end")
@@ -157,7 +158,7 @@ def break_end(
                 note=req.note,
                 created_by=current_user.id,
         )
-        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+        return api_success({"event":event,"attendance_day":day}, status_code=201)
 
 
 @router.post("/check-out")
@@ -176,7 +177,7 @@ def check_out(
                 note=req.note,
                 created_by=current_user.id,
         )
-        return {"message":"","data":{"event":event,"attendance_day":day},"status":True}
+        return api_success({"event":event,"attendance_day":day}, status_code=201)
 
 
 @router.post("/manual-correction")
@@ -187,7 +188,7 @@ def manual_correction(
 ):
         req.corrected_by = current_user.id
         correction, day = create_attendance_correction(req, db)
-        return {"message":"","data":{"correction":correction,"attendance_day":day},"status":True}
+        return api_success({"correction":correction,"attendance_day":day}, status_code=201)
 
 
 @router.get("/day/{employee_id}/{work_date}")
@@ -198,7 +199,7 @@ def get_attendance_day_view(
         current_user: User = Depends(require_self_or_permission("attendance.read_all")),
 ):
         day = get_attendance_day(employee_id, work_date, db)
-        return {"message":"","data":day,"status":True}
+        return api_success(day)
 
 
 @router.get("/employee/{employee_id}/{start_date}/{end_date}")
@@ -210,7 +211,7 @@ def get_employee_attendance_days(
         current_user: User = Depends(require_self_or_permission("attendance.read_all")),
 ):
         days = get_attendance_days(employee_id, start_date, end_date, db)
-        return {"message":"","data":days,"status":True}
+        return api_success(days)
 
 
 @router.post("/recalculate/{employee_id}/{start_date}/{end_date}")
@@ -222,7 +223,7 @@ def recalculate_attendance(
         current_user: User = Depends(require_permissions("attendance.recalculate")),
 ):
         days = recalculate_attendance_for_employee(employee_id, start_date, end_date, db)
-        return {"message":"","data":{"employee_id":employee_id,"recalculated_days":len(days)},"status":True}
+        return api_success({"employee_id":employee_id,"recalculated_days":len(days)})
 
 
 

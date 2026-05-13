@@ -1,4 +1,5 @@
 from fastapi import APIRouter,Depends
+from app.core.responses import api_success
 from app.services.settings import update_settings,add_new_settings,get_settings as get_settings_svc
 from app.services.policy_service import (
     get_default_work_schedule,
@@ -21,7 +22,7 @@ def get_settings(
     current_user: User = Depends(require_permissions("settings.read")),
 ):
     res = get_settings_svc(db)
-    return {"message":"","data":res,"status":True}
+    return api_success(res)
     
 # @router.put("/")
 # def add_new(set:SettingsBaseModel,db:Session=Depends(get_db)):
@@ -35,7 +36,7 @@ def get_salary_types(
     current_user: User = Depends(require_permissions("settings.update")),
 ):
     update_settings(set,db)
-    return {"message":"","data":None,"status":True}
+    return api_success()
 
 
 @router.get("/work-schedule")
@@ -44,7 +45,7 @@ def get_work_schedule(
     current_user: User = Depends(require_permissions("settings.read")),
 ):
     schedule = get_default_work_schedule(db)
-    return {"message":"","data":schedule,"status":True}
+    return api_success(schedule)
 
 
 @router.put("/work-schedule")
@@ -56,7 +57,7 @@ def put_work_schedule(
     schedule = update_default_work_schedule(db, **payload.model_dump())
     db.commit()
     db.refresh(schedule)
-    return {"message":"","data":schedule,"status":True}
+    return api_success(schedule)
 
 
 @router.get("/payroll-policy")
@@ -65,7 +66,7 @@ def get_payroll_policy(
     current_user: User = Depends(require_permissions("settings.read")),
 ):
     policy = get_or_create_payroll_policy(db)
-    return {"message":"","data":policy,"status":True}
+    return api_success(policy)
 
 
 @router.put("/payroll-policy")
@@ -77,5 +78,5 @@ def put_payroll_policy(
     policy = update_payroll_policy(db, **payload.model_dump())
     db.commit()
     db.refresh(policy)
-    return {"message":"","data":policy,"status":True}
+    return api_success(policy)
 

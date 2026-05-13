@@ -1,10 +1,12 @@
 from datetime import date as Date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_authenticated_user, require_permissions
+from app.exceptions.base_exception import BadRequestException, ConflictException
 from app.models.auth import User
 from app.models.types.vacationStatus import VacationStatuses
 from app.schemas.attendance_payroll import AttendanceDayRead, EmployeePayrollRead
@@ -20,17 +22,14 @@ router = APIRouter()
 
 def _current_employee_id(current_user: User) -> int:
     if current_user.employee_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This user is not linked to an employee profile",
-        )
+        raise BadRequestException("This user is not linked to an employee profile")
     return current_user.employee_id
 
 
 @router.get("/profile")
 def get_my_profile(current_user: User = Depends(require_authenticated_user), db: Session = Depends(get_db)):
     employee = get_employee_or_404(_current_employee_id(current_user), db)
-    return {"message": "", "data": serialize_employee(employee), "status": True}
+    return api_success(serialize_employee(employee))
 
 
 @router.get("/attendance")
@@ -42,7 +41,7 @@ def get_my_attendance(
 ):
     employee_id = _current_employee_id(current_user)
     days = get_attendance_days(employee_id, start_date, end_date, db)
-    return {"message": "", "data": [AttendanceDayRead.model_validate(day) for day in days], "status": True}
+    return api_success([AttendanceDayRead.model_validate(day) for day in days])
 
 
 @router.get("/payroll")
@@ -54,13 +53,13 @@ def get_my_payroll(
     from app.services.payroll_calculation_service import get_employee_payroll_by_period
 
     payroll = get_employee_payroll_by_period(_current_employee_id(current_user), period_id, db)
-    return {"message": "", "data": EmployeePayrollRead.model_validate(payroll), "status": True}
+    return api_success(EmployeePayrollRead.model_validate(payroll))
 
 
 @router.get("/vacations")
 def get_my_vacations(current_user: User = Depends(require_permissions("vacations.read_own")), db: Session = Depends(get_db)):
     vacations = get_emp_all_vacations(_current_employee_id(current_user), db)
-    return {"message": "", "data": vacations, "status": True}
+    return api_success(vacations)
 
 
 @router.post("/vacations/request")
@@ -71,7 +70,7 @@ def request_my_vacation(
 ):
     employee_id = _current_employee_id(current_user)
     if overlab_check(employee_id, payload.start_date, payload.end_date, db):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Vacation already exists in the requested range")
+        raise ConflictException("Vacation already exists in the requested range", code="vacation_overlap")
     add_vacation(
         VacationBaseModel(
             employee_id=employee_id,
@@ -83,7 +82,7 @@ def request_my_vacation(
         ),
         db,
     )
-    return {"message": "", "data": None, "status": True}
+    return api_success(status_code=201)
 
 
 def _handle_self_attendance_action(
@@ -104,7 +103,7 @@ def _handle_self_attendance_action(
         note=payload.note,
         created_by=current_user.id,
     )
-    return {"message": "", "data": {"event": event, "attendance_day": day}, "status": True}
+    return api_success({"event": event, "attendance_day": day}, status_code=201)
 
 
 @router.post("/attendance/check-in")

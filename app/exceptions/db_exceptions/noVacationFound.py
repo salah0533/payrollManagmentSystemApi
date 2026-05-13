@@ -1,5 +1,6 @@
+from app.exceptions.base_exception import ResourceNotFoundException
 
-from app.exceptions.base_exception import AppException
 
-class NoVacationFound(AppException):
-    pass
+class NoVacationFound(ResourceNotFoundException):
+    def __init__(self, message: str | None = None):
+        super().__init__("Vacation", message=message or "Vacation not found")

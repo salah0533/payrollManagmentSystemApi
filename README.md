@@ -1,5 +1,15 @@
 # payrollManagmentSystemApi
 
+## Response and Error Handling
+
+The API now uses centralized success and error response helpers, custom application exceptions, and global exception handlers. The response contract and manual verification checklist are documented in [docs/api_response_error_handling.md](docs/api_response_error_handling.md).
+
+Run the automated response handling checks with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 FastAPI + SQLAlchemy backend for employee management, attendance, vacations, and payroll.
 
 ## First-Time Setup

@@ -1,4 +1,5 @@
 from fastapi import APIRouter,Depends
+from app.core.responses import api_success
 from app.dependencies.auth import require_authenticated_user
 from app.models.auth import User
 from app.services.vacation_statuses_services import get_payment_types_srv
@@ -13,7 +14,7 @@ def get_vacation_statuses(
     current_user: User = Depends(require_authenticated_user),
 ):
     data = get_payment_types_srv(db)
-    return {"message":"","data":data,"status":True}
+    return api_success(data)
 
 #    {
 #       "id": 0,

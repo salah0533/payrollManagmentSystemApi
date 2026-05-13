@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.auth import User
@@ -14,18 +15,18 @@ router = APIRouter()
 @router.post("/login")
 def login_user(payload: LoginRequest, db: Session = Depends(get_db)):
     token = login(payload.identifier, payload.password, db)
-    return {"message": "", "data": token, "status": True}
+    return api_success(token)
 
 
 @router.post("/refresh")
 def refresh_user_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
     token = refresh_access_token(payload.refresh_token, db)
-    return {"message": "", "data": token, "status": True}
+    return api_success(token)
 
 
 @router.get("/me")
 def auth_me(current_user: User = Depends(get_current_user)):
-    return {"message": "", "data": get_me(current_user), "status": True}
+    return api_success(get_me(current_user))
 
 
 @router.post("/change-password")
@@ -35,11 +36,10 @@ def auth_change_password(
     db: Session = Depends(get_db),
 ):
     change_password(current_user, payload, db)
-    return {"message": "Password changed successfully", "data": None, "status": True}
+    return api_success(message="Password changed successfully")
 
 
 @router.post("/logout")
 def auth_logout(current_user: User = Depends(get_current_user)):
     response = LogoutResponse(message="Logout is stateless; discard the access and refresh tokens on the client.")
-    return {"message": "", "data": response, "status": True}
-
+    return api_success(response)

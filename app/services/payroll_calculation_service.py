@@ -2,10 +2,10 @@ import calendar
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from fastapi import HTTPException
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.exceptions.base_exception import BadRequestException, ResourceNotFoundException
 from app.models.attendance_payroll import (
     AttendanceDay,
     EmployeePayroll,
@@ -85,7 +85,7 @@ def _get_employee_payroll(employee_id: int, payroll_period_id: int, db: Session)
 
     period = db.get(PayrollPeriod, payroll_period_id)
     if not period:
-        raise HTTPException(status_code=404, detail="Payroll period not found")
+        raise ResourceNotFoundException("Payroll period")
 
     compensation = get_employee_compensation(employee_id, period.end_date, db)
     payroll = EmployeePayroll(
@@ -388,7 +388,7 @@ def _upsert_discrepancy(
 def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: Session):
     period = db.get(PayrollPeriod, payroll_period_id)
     if not period:
-        raise HTTPException(status_code=404, detail="Payroll period not found")
+        raise ResourceNotFoundException("Payroll period")
 
     payroll = _get_employee_payroll(employee_id, payroll_period_id, db)
     schedule = get_employee_schedule(employee_id, period.start_date, db)
@@ -469,15 +469,15 @@ def calculate_employee_payroll(
 ):
     employee = db.get(Employees, employee_id)
     if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise ResourceNotFoundException("Employee")
 
     period = db.get(PayrollPeriod, payroll_period_id)
     if not period:
-        raise HTTPException(status_code=404, detail="Payroll period not found")
+        raise ResourceNotFoundException("Payroll period")
 
     payroll = _get_employee_payroll(employee_id, payroll_period_id, db)
     if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
-        raise HTTPException(status_code=400, detail="Approved or paid payroll cannot be recalculated")
+        raise BadRequestException("Approved or paid payroll cannot be recalculated")
 
     old_gross_salary = _decimal(payroll.gross_salary)
     old_net_salary = _decimal(payroll.net_salary)
@@ -536,9 +536,9 @@ def calculate_employee_payroll(
 def recalculate_payroll_period(payroll_period_id: int, db: Session, created_by: int | None = None):
     period = db.get(PayrollPeriod, payroll_period_id)
     if not period:
-        raise HTTPException(status_code=404, detail="Payroll period not found")
+        raise ResourceNotFoundException("Payroll period")
     if period.status in FINAL_PAYROLL_STATUSES:
-        raise HTTPException(status_code=400, detail="Approved or paid payroll period cannot be recalculated")
+        raise BadRequestException("Approved or paid payroll period cannot be recalculated")
 
     employees = db.scalars(select(Employees).where(Employees.is_active.is_(True))).all()
     payrolls: list[EmployeePayroll] = []
@@ -596,11 +596,11 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
         .where(EmployeePayroll.id == employee_payroll_id)
     )
     if not payroll:
-        raise HTTPException(status_code=404, detail="Employee payroll not found")
+        raise ResourceNotFoundException("Employee payroll")
 
     open_high = [item for item in payroll.discrepancies if item.status == "open" and item.severity == "high"]
     if open_high:
-        raise HTTPException(status_code=400, detail="Resolve high-severity discrepancies before approval")
+        raise BadRequestException("Resolve high-severity discrepancies before approval")
 
     old_status = payroll.status
     payroll.status = "approved"
@@ -631,7 +631,7 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
 def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: int | None = None):
     payroll = db.get(EmployeePayroll, employee_payroll_id)
     if not payroll:
-        raise HTTPException(status_code=404, detail="Employee payroll not found")
+        raise ResourceNotFoundException("Employee payroll")
 
     old_status = payroll.status
     policy = get_or_create_payroll_policy(db)
@@ -663,7 +663,7 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
 def resolve_payroll_discrepancy(discrepancy_id: int, resolution_note: str, db: Session, resolved_by: int | None = None):
     discrepancy = db.get(PayrollDiscrepancy, discrepancy_id)
     if not discrepancy:
-        raise HTTPException(status_code=404, detail="Payroll discrepancy not found")
+        raise ResourceNotFoundException("Payroll discrepancy")
 
     discrepancy.status = "resolved"
     discrepancy.resolution_note = resolution_note
@@ -686,7 +686,7 @@ def resolve_payroll_discrepancy(discrepancy_id: int, resolution_note: str, db: S
 def add_payroll_adjustment(payload, db: Session):
     payroll = db.get(EmployeePayroll, payload.employee_payroll_id)
     if not payroll:
-        raise HTTPException(status_code=404, detail="Employee payroll not found")
+        raise ResourceNotFoundException("Employee payroll")
 
     adjustment = PayrollAdjustment(
         employee_payroll_id=payload.employee_payroll_id,
@@ -743,7 +743,7 @@ def get_payroll_period(period_id: int, db: Session):
         .where(PayrollPeriod.id == period_id)
     )
     if not period:
-        raise HTTPException(status_code=404, detail="Payroll period not found")
+        raise ResourceNotFoundException("Payroll period")
     return period
 
 

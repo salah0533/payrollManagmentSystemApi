@@ -10,6 +10,16 @@ class PaymentBaseModel(BaseModel):
     description:str
     year_month:Optional[str]=None
 
+    @field_validator("year_month")
+    def validate_year_month(cls, v):
+        if v is None:
+            return v
+        try:
+            datetime.strptime(v, "%Y-%m")
+        except ValueError as exc:
+            raise ValueError("Invalid format. Use YYYY-MM") from exc
+        return v
+
 class UpdatePaymentBaseModel(BaseModel):
     id:int
     employee_id :int
