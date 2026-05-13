@@ -40,7 +40,7 @@ def list_notifications(
 
 @router.get("/{notification_id}")
 def get_notification(
-    notification_id: int,
+    notification_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("notifications.read_all")),
 ):

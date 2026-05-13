@@ -179,7 +179,7 @@ def get_my_notification_unread_count(
 
 @router.post("/notifications/{notification_id}/read")
 def mark_my_notification_read(
-    notification_id: int,
+    notification_id: str,
     current_user: User = Depends(require_permissions("notifications.read_own")),
     db: Session = Depends(get_db),
 ):
@@ -200,7 +200,7 @@ def mark_all_my_notifications_read(
 
 @router.post("/notifications/{notification_id}/archive")
 def archive_my_notification(
-    notification_id: int,
+    notification_id: str,
     current_user: User = Depends(require_permissions("notifications.read_own")),
     db: Session = Depends(get_db),
 ):

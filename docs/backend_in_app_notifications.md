@@ -7,6 +7,8 @@ This backend implements an in-app notification system with two tables:
 - `notifications`: shared notification content
 - `notification_recipients`: per-user delivery state inside the app
 
+Only the notification-related primary keys use UUIDv7 in this task. The rest of the project remains on integer IDs.
+
 The design keeps the message content separate from recipient state so one notification can be sent to many users while each recipient keeps their own `read` and `archived` flags.
 
 ## Architecture
@@ -26,6 +28,8 @@ Stores the shared message payload:
 - `created_at`
 - `expires_at`
 
+`Notification.id` uses UUIDv7.
+
 ### `NotificationRecipient`
 
 Stores state per recipient:
@@ -38,6 +42,8 @@ Stores state per recipient:
 - `is_archived`
 - `archived_at`
 - `created_at`
+
+`NotificationRecipient.id` and `NotificationRecipient.notification_id` use UUIDv7-compatible string values.
 
 Important constraints:
 

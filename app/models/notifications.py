@@ -5,12 +5,13 @@ from sqlalchemy.orm import relationship
 
 from app.core.security import utc_now
 from app.db.base import Base
+from app.utility.uuid7 import uuid7_str
 
 
 class Notification(Base):
     __tablename__ = "notifications"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String(36), primary_key=True, index=True, default=uuid7_str)
     notification_type = Column(String(100), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     message = Column(Text, nullable=False)
@@ -31,8 +32,8 @@ class NotificationRecipient(Base):
         UniqueConstraint("notification_id", "user_id", name="uq_notification_recipients_notification_user"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
-    notification_id = Column(Integer, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(String(36), primary_key=True, index=True, default=uuid7_str)
+    notification_id = Column(String(36), ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     is_read = Column(Boolean, nullable=False, default=False, index=True)
     read_at = Column(DateTime(timezone=True), nullable=True)

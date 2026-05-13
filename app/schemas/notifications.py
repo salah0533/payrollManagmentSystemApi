@@ -55,8 +55,8 @@ class NotificationHrSendPermissionUpdateRequest(BaseModel):
 
 
 class UserNotificationRead(BaseModel):
-    notification_id: int
-    recipient_id: int
+    notification_id: str
+    recipient_id: str
     notification_type: str
     title: str
     message: str
@@ -86,13 +86,13 @@ class NotificationUnreadCountRead(BaseModel):
 
 
 class NotificationActionResultRead(BaseModel):
-    notification_id: int | None = None
+    notification_id: str | None = None
     updated: int | None = None
     status: str
 
 
 class NotificationRecipientStateRead(BaseModel):
-    id: int
+    id: str
     user_id: int
     username: str | None = None
     is_read: bool
@@ -103,7 +103,7 @@ class NotificationRecipientStateRead(BaseModel):
 
 
 class NotificationAdminRead(BaseModel):
-    id: int
+    id: str
     notification_type: str
     title: str
     message: str

@@ -191,7 +191,7 @@ class NotificationService:
             or 0
         )
 
-    def mark_as_read(self, *, user_id: int, notification_id: int) -> UserNotificationRead:
+    def mark_as_read(self, *, user_id: int, notification_id: str) -> UserNotificationRead:
         recipient = self._get_user_recipient(user_id=user_id, notification_id=notification_id)
         if not recipient.is_read:
             recipient.is_read = True
@@ -219,7 +219,7 @@ class NotificationService:
         self.db.flush()
         return len(recipients)
 
-    def archive_notification(self, *, user_id: int, notification_id: int) -> UserNotificationRead:
+    def archive_notification(self, *, user_id: int, notification_id: str) -> UserNotificationRead:
         recipient = self._get_user_recipient(user_id=user_id, notification_id=notification_id)
         if not recipient.is_archived:
             recipient.is_archived = True
@@ -271,7 +271,7 @@ class NotificationService:
             offset=offset,
         )
 
-    def get_notification_detail(self, *, notification_id: int) -> NotificationDetailRead:
+    def get_notification_detail(self, *, notification_id: str) -> NotificationDetailRead:
         notification = self.db.scalar(
             select(Notification)
             .options(selectinload(Notification.recipients).selectinload(NotificationRecipient.user))
@@ -372,7 +372,7 @@ class NotificationService:
             count_stmt = count_stmt.where(expiry_clause)
         return stmt, count_stmt
 
-    def _get_user_recipient(self, *, user_id: int, notification_id: int) -> NotificationRecipient:
+    def _get_user_recipient(self, *, user_id: int, notification_id: str) -> NotificationRecipient:
         recipient = self.db.scalar(
             select(NotificationRecipient)
             .join(Notification, Notification.id == NotificationRecipient.notification_id)
