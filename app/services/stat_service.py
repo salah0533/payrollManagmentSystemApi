@@ -1,13 +1,14 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select,func,extract
 from app.models.attendence import Attendence
 from app.models.types.attendenceTypes import AttendanceType
-from app.services.vacation_service import get_emp_all_vacations
+from app.services.vacation_service import get_all_current_vacations, get_emp_all_vacations
 from app.utility.helper import hours_between , dates_between_skip_friday
 from app.models.employees import Employees
 from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
 from datetime import datetime,date
 from dateutil.relativedelta import relativedelta
+import calendar
 
 def att_stat(emp_id,start,end,db:Session):
     emp = db.get(Employees,emp_id)
@@ -95,3 +96,36 @@ def att_stat(emp_id,start,end,db:Session):
                 att["not_selected"] +=1
     return att
 
+def dashbord_card_stat(db: Session):
+    total_emps = db.scalar(
+        select(func.count(Employees.id))
+    )
+
+    total_active_emps = db.scalar(
+        select(func.count(Employees.id))
+        .where(Employees.is_active.is_(True))
+    )
+
+    today = date.today()
+    day = date.today().day
+    month = today.month
+    year = today.year
+
+    total_att = db.scalar(
+        select(func.count(Attendence.id))
+        .where(
+            Attendence.attendence_type == AttendanceType.Presnt,
+            extract("month", Attendence.date) == month,
+            extract("year", Attendence.date) == year
+        )
+    )
+    total_possible = total_active_emps * day
+
+    if total_possible == 0:
+        total_att_percent = 0
+    else:
+        total_att_percent = (total_att * 100) / total_possible
+
+    total_vacation = len(get_all_current_vacations(db))
+
+    return total_emps, total_active_emps, total_att_percent,total_vacation

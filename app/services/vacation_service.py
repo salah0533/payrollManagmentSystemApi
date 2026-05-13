@@ -11,11 +11,15 @@ def get_all_vacations(year:int,db:Session):
         .where(extract("year",Vacation.start_date)==year)
     ).all()
 
-def get_all_current_vacations(db:Session):
+def get_all_current_vacations(db: Session):
     today = date.today()
+
     return db.scalars(
         select(Vacation)
-        .where(Vacation.end_date >= today)
+        .where(
+            Vacation.start_date <= today,
+            Vacation.end_date >= today
+        )
     ).all()
 
 def get_employee_vacations(id:int,start,end,db:Session):

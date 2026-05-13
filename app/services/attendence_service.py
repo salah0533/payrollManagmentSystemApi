@@ -148,6 +148,13 @@ def get_employee_attendence_by_date(id:int,start:date,end:date,db:Session):
             Attendence.date <= end )
     ).all()
 
+def get_attendence_by_date(start:date,end:date,db:Session):
+    return db.scalars(
+        select(Attendence).where(
+            Attendence.date >= start,
+            Attendence.date <= end )
+    ).all()
+
 def get_employee_attendence(id:int,db:Session):
     return db.scalars(
         select(Attendence).where(
