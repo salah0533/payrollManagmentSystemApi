@@ -32,6 +32,14 @@ Run the seed with:
 python -m app.scripts.seed_initial_data
 ```
 
+It also seeds:
+
+- roles
+- permissions
+- role-permission mappings
+- a default admin account when no admin exists
+- default settings, work schedule, and payroll policy rows
+
 ## First-Run Commands
 
 ```bash
@@ -73,3 +81,17 @@ Code-constant reference values used by the modern attendance/payroll layer:
 - payroll discrepancy types: `missing_checkout`, `missing_checkin`, `attendance_changed_after_approval`, `overtime_conflict`, `vacation_overlap`, `missing_attendance`
 - payroll discrepancy statuses: `open`, `resolved`, `ignored`
 - role codes: `admin`, `hr`, `employee`
+
+## Default Admin
+
+Default development credentials:
+
+- username: `admin`
+- password: `admin`
+
+Important:
+
+- The default admin is created only if no admin account exists.
+- The password is hashed before being stored.
+- The account is seeded with `must_change_password = true`.
+- Change the default admin password immediately after first login.

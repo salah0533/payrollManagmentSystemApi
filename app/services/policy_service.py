@@ -4,9 +4,10 @@ from decimal import Decimal
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.attendance_payroll import AuditLog, EmployeeCompensation, PayrollPolicy, WorkSchedule
+from app.models.attendance_payroll import EmployeeCompensation, PayrollPolicy, WorkSchedule
 from app.models.employees import Employees
 from app.models.settings import Settings
+from app.services.audit_service import save_audit_log
 
 
 SALARY_TYPE_MAP = {
@@ -182,27 +183,3 @@ def parse_holidays(values: list[str] | None) -> list[date]:
         except ValueError:
             continue
     return result
-
-
-def save_audit_log(
-    db: Session,
-    action: str,
-    entity_type: str,
-    entity_id: int,
-    old_data_json: dict | None = None,
-    new_data_json: dict | None = None,
-    user_id: int | None = None,
-    ip_address: str | None = None,
-):
-    log = AuditLog(
-        user_id=user_id,
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        old_data_json=old_data_json,
-        new_data_json=new_data_json,
-        ip_address=ip_address,
-    )
-    db.add(log)
-    db.flush()
-    return log

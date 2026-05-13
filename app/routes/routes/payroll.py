@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.dependencies.auth import require_permissions, require_self_or_permission
+from app.models.auth import User
 from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollDiscrepancyResolveRequest
 from app.services.payroll_calculation_service import (
     add_payroll_adjustment,
@@ -21,62 +23,106 @@ router = APIRouter()
 
 
 @router.get("/period/{period_id}")
-def get_period(period_id: int, db: Session = Depends(get_db)):
+def get_period(
+    period_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
     period = get_payroll_period(period_id, db)
     return {"message": "", "data": period, "status": True}
 
 
 @router.get("/employee/{employee_id}/{period_id}")
-def get_employee_period_payroll(employee_id: int, period_id: int, db: Session = Depends(get_db)):
+def get_employee_period_payroll(
+    employee_id: int,
+    period_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_self_or_permission("payroll.read_all")),
+):
     payroll = get_employee_payroll_by_period(employee_id, period_id, db)
     return {"message": "", "data": payroll, "status": True}
 
 
 @router.post("/recalculate/{employee_id}/{period_id}")
-def recalculate_employee_payroll(employee_id: int, period_id: int, db: Session = Depends(get_db)):
-    payroll = calculate_employee_payroll(employee_id, period_id, db, reason="manual_recalculation", force_history=True)
+def recalculate_employee_payroll(
+    employee_id: int,
+    period_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.calculate")),
+):
+    payroll = calculate_employee_payroll(employee_id, period_id, db, reason="manual_recalculation", created_by=current_user.id, force_history=True)
     db.commit()
     db.refresh(payroll)
     return {"message": "", "data": payroll, "status": True}
 
 
 @router.post("/recalculate-period/{period_id}")
-def recalculate_period(period_id: int, db: Session = Depends(get_db)):
-    payrolls = recalculate_payroll_period(period_id, db)
+def recalculate_period(
+    period_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.calculate")),
+):
+    payrolls = recalculate_payroll_period(period_id, db, created_by=current_user.id)
     return {"message": "", "data": payrolls, "status": True}
 
 
 @router.post("/approve/{employee_payroll_id}")
-def approve_payroll(employee_payroll_id: int, approved_by: int | None = None, db: Session = Depends(get_db)):
-    payroll = approve_employee_payroll(employee_payroll_id, db, approved_by=approved_by)
+def approve_payroll(
+    employee_payroll_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.approve")),
+):
+    payroll = approve_employee_payroll(employee_payroll_id, db, approved_by=current_user.id)
     return {"message": "", "data": payroll, "status": True}
 
 
 @router.post("/mark-paid/{employee_payroll_id}")
-def mark_paid(employee_payroll_id: int, paid_by: int | None = None, db: Session = Depends(get_db)):
-    payroll = mark_employee_payroll_paid(employee_payroll_id, db, paid_by=paid_by)
+def mark_paid(
+    employee_payroll_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.mark_paid")),
+):
+    payroll = mark_employee_payroll_paid(employee_payroll_id, db, paid_by=current_user.id)
     return {"message": "", "data": payroll, "status": True}
 
 
 @router.get("/history/{employee_payroll_id}")
-def get_history(employee_payroll_id: int, db: Session = Depends(get_db)):
+def get_history(
+    employee_payroll_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
     history = get_payroll_history(employee_payroll_id, db)
     return {"message": "", "data": history, "status": True}
 
 
 @router.get("/discrepancies/{period_id}")
-def get_discrepancy_list(period_id: int, db: Session = Depends(get_db)):
+def get_discrepancy_list(
+    period_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
     discrepancies = get_payroll_discrepancies(period_id, db)
     return {"message": "", "data": discrepancies, "status": True}
 
 
 @router.post("/discrepancy/{discrepancy_id}/resolve")
-def resolve_discrepancy(discrepancy_id: int, req: PayrollDiscrepancyResolveRequest, db: Session = Depends(get_db)):
-    discrepancy = resolve_payroll_discrepancy(discrepancy_id, req.resolution_note, db, resolved_by=req.resolved_by)
+def resolve_discrepancy(
+    discrepancy_id: int,
+    req: PayrollDiscrepancyResolveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.adjust")),
+):
+    discrepancy = resolve_payroll_discrepancy(discrepancy_id, req.resolution_note, db, resolved_by=current_user.id)
     return {"message": "", "data": discrepancy, "status": True}
 
 
 @router.post("/adjustment")
-def create_adjustment(req: PayrollAdjustmentCreate, db: Session = Depends(get_db)):
+def create_adjustment(
+    req: PayrollAdjustmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.adjust")),
+):
+    req.created_by = current_user.id
     adjustment = add_payroll_adjustment(req, db)
     return {"message": "", "data": adjustment, "status": True}

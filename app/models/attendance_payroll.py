@@ -249,11 +249,14 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     action = Column(String(100), nullable=False)
     entity_type = Column(String(100), nullable=False)
-    entity_id = Column(Integer, nullable=False)
+    entity_id = Column(Integer, nullable=True)
     old_data_json = Column(JSON, nullable=True)
     new_data_json = Column(JSON, nullable=True)
     ip_address = Column(String(64), nullable=True)
+    user_agent = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    user = relationship("User")

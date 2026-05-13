@@ -1,4 +1,6 @@
 from fastapi import APIRouter,Depends
+from app.dependencies.auth import require_authenticated_user
+from app.models.auth import User
 from app.services.vacation_statuses_services import get_payment_types_srv
 from sqlalchemy.orm import Session
 from app.db.session import get_db
@@ -6,7 +8,10 @@ from app.db.session import get_db
 router = APIRouter()
 
 @router.get("/")
-def get_vacation_statuses(db:Session=Depends(get_db)):
+def get_vacation_statuses(
+    db:Session=Depends(get_db),
+    current_user: User = Depends(require_authenticated_user),
+):
     data = get_payment_types_srv(db)
     return {"message":"","data":data,"status":True}
 
