@@ -1,5 +1,5 @@
 from app.db.base import Base
-from sqlalchemy import String,Integer,Column,ForeignKey,DECIMAL,Boolean
+from sqlalchemy import String,Integer,Column,ForeignKey,DECIMAL,Boolean,Date
 from sqlalchemy.orm import relationship
 
 class Employees(Base):
@@ -17,13 +17,16 @@ class Employees(Base):
     hour_price = Column(DECIMAL, nullable=False)
     extra_hours_price = Column(DECIMAL, nullable=False)
     daily_work_hours = Column(Integer, nullable=False)
-    vacation_days = Column(Integer, nullable=False) #allowed yearly vacation days
     is_active = Column(Boolean,nullable=False)
     allowed_late = Column(DECIMAL,nullable=False)
     min_extraTime = Column(DECIMAL,nullable=False) # not paid
+    joined = Column(Date,nullable=False)
     
 
     attendence_tab = relationship("Attendence",back_populates="employee_tab",
+                             cascade="all, delete-orphan")
+    
+    annualvacation_tab = relationship("AnnualVacations",back_populates="employee_tab",
                              cascade="all, delete-orphan")
     
     payment_tab = relationship("Payments",back_populates="employee_tab",
@@ -48,7 +51,6 @@ class Employees(Base):
             "hour_price":self.hour_price,
             "day_price":self.day_price,
             "monthly_price":self.monthly_price,
-            "vacation_days":self.vacation_days,
             "is_active":self.is_active,
             "allowed_late":self.allowed_late,
             "min_extraTime":self.min_extraTime

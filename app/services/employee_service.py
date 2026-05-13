@@ -36,7 +36,6 @@ def add_employee(emp:dict,db:Session):
             hour_price=emp.hour_price,
             day_price=emp.day_price,
             monthly_price=emp.monthly_price,
-            vacation_days=emp.vacation_days,
             is_active=emp.is_active,
             allowed_late=emp.allowed_late,
             min_extraTime=emp.min_extraTime,

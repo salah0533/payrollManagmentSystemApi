@@ -8,6 +8,8 @@ from app.routes.routes.payment_types import router as payment_types_router
 from app.routes.routes.salary_types import router as salary_types_router
 from app.routes.routes.vacation_statuses import router as vac_statuses_router
 from app.routes.routes.vacation_types import router as vac_types_router
+from app.routes.routes.annual_vacations import router as ann_vac_router
+from app.routes.routes.settings import router as settings_router
 from fastapi import APIRouter
 
 
@@ -18,6 +20,8 @@ routers.include_router(emp_router,prefix="/employee",tags=["employee"])
 routers.include_router(pay_router,prefix="/payment",tags=["payment"])
 routers.include_router(stat_router,prefix="/stat",tags=["stat"])
 routers.include_router(vac_router,prefix="/vacation",tags=["vacation"])
+routers.include_router(ann_vac_router,prefix="/annual_vacations",tags=["annual vacations"])
+routers.include_router(settings_router,prefix="/settings",tags=["settings"])
 routers.include_router(att_types_router,prefix="/att_types",tags=["attendance types"])
 routers.include_router(payment_types_router,prefix="/payment_types",tags=["payment types"])
 routers.include_router(salary_types_router,prefix="/salary_types",tags=["salary types"])

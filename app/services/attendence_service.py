@@ -4,6 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.models.employees import Employees
 from app.models.attendence import Attendence
 from app.models.vacation import Vacation
+from app.services.settings import get_settings
 from app.schemas.attendenceBaseModel import AttendenceBaseModel
 from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
 from app.models.types.attendenceTypes import AttendanceType
@@ -92,10 +93,64 @@ def add_new_attendence(data:AttendenceBaseModel,db:Session):
     db.commit()
     db.refresh(new_att)
 
+
+def mark_all_emp_present(db: Session):
+    emps = db.scalars(
+        select(Employees.id)
+        .where(Employees.is_active.is_(True))
+    ).all()
+
+    if not emps:
+        return {"updated": 0, "created": 0}
+
+    today = date.today()
+
+    # Get today's attendance only (IMPORTANT ⚠️)
+    att = db.scalars(
+        select(Attendence)
+        .where(
+            Attendence.employee_id.in_(emps),
+            Attendence.date == today
+        )
+    ).all()
+
+    sett = get_settings(db)
+
+    # Update existing records
+    for a in att:
+        a.attendence_type = AttendanceType.Presnt
+        if a.employee_id in emps:
+            emps.remove(a.employee_id)
+
+    # Create missing records
+    atts = []
+    for emp in emps:
+        atts.append(
+            Attendence(
+                employee_id=emp,  # ✅ FIXED
+                entry_time=sett.entry_time,
+                exit_time=sett.exit_time,
+                date=today,
+                attendence_type=AttendanceType.Presnt,
+            )
+        )
+
+    db.add_all(atts)   # ✅ IMPORTANT
+    db.commit()
+
+    return {"updated": len(att), "created": len(atts)}
+
 def get_employee_attendence_by_date(id:int,start:date,end:date,db:Session):
     return db.scalars(
         select(Attendence).where(
             Attendence.employee_id==id,
+            Attendence.date >= start,
+            Attendence.date <= end )
+    ).all()
+
+def get_attendence_by_date(start:date,end:date,db:Session):
+    return db.scalars(
+        select(Attendence).where(
             Attendence.date >= start,
             Attendence.date <= end )
     ).all()
