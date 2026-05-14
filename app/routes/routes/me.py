@@ -58,6 +58,25 @@ def get_my_payroll(
     return api_success(EmployeePayrollRead.model_validate(payroll))
 
 
+@router.get("/payroll/current")
+def get_my_current_payroll(
+    current_user: User = Depends(require_permissions("payroll.read_own")),
+    db: Session = Depends(get_db),
+):
+    from app.schemas.attendance_payroll import PayrollPeriodRead
+    from app.services.payroll_calculation_service import get_employee_payroll_by_period, get_or_create_payroll_period_for_date
+
+    period = get_or_create_payroll_period_for_date(Date.today(), db)
+    payroll = get_employee_payroll_by_period(_current_employee_id(current_user), period.id, db)
+    db.refresh(period)
+    return api_success(
+        {
+            "period": PayrollPeriodRead.model_validate(period),
+            "payroll": EmployeePayrollRead.model_validate(payroll),
+        }
+    )
+
+
 @router.get("/vacations")
 def get_my_vacations(current_user: User = Depends(require_permissions("vacations.read_own")), db: Session = Depends(get_db)):
     vacations = get_emp_all_vacations(_current_employee_id(current_user), db)

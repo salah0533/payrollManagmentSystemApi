@@ -12,6 +12,7 @@ from app.services.user_service import (
     create_user,
     deactivate_user,
     get_user_or_404,
+    list_roles,
     list_users,
     remove_role,
     reset_password,
@@ -26,6 +27,11 @@ router = APIRouter()
 @router.get("/")
 def get_users(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return api_success(list_users(db))
+
+
+@router.get("/roles")
+def get_roles(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    return api_success(list_roles(db))
 
 
 @router.get("/{user_id}")

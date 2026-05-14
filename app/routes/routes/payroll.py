@@ -1,3 +1,5 @@
+from datetime import date as Date
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -10,9 +12,11 @@ from app.services.payroll_calculation_service import (
     add_payroll_adjustment,
     approve_employee_payroll,
     get_employee_payroll_by_period,
+    get_or_create_payroll_period_for_date,
     get_payroll_discrepancies,
     get_payroll_history,
     get_payroll_period,
+    list_payroll_periods,
     mark_employee_payroll_paid,
     recalculate_payroll_period,
     resolve_payroll_discrepancy,
@@ -21,6 +25,30 @@ from app.services.payroll_calculation_service import (
 
 
 router = APIRouter()
+
+
+@router.get("/periods")
+def get_periods(
+    limit: int = 24,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
+    return api_success(list_payroll_periods(db, limit=limit))
+
+
+@router.post("/periods/current")
+def generate_current_period(
+    target_date: Date | None = None,
+    recalculate: bool = True,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.calculate")),
+):
+    period = get_or_create_payroll_period_for_date(target_date or Date.today(), db)
+    if recalculate:
+        recalculate_payroll_period(period.id, db, created_by=current_user.id)
+    else:
+        db.commit()
+    return api_success(get_payroll_period(period.id, db), status_code=201)
 
 
 @router.get("/period/{period_id}")

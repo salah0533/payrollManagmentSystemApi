@@ -3,13 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-
 from app.core.config import settings
 
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = None
+
+
+def _get_pwd_context():
+    global pwd_context
+    if pwd_context is None:
+        from passlib.context import CryptContext
+
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    return pwd_context
 
 
 def utc_now() -> datetime:
@@ -17,11 +23,11 @@ def utc_now() -> datetime:
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
-    return pwd_context.verify(plain_password, password_hash)
+    return _get_pwd_context().verify(plain_password, password_hash)
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return _get_pwd_context().hash(password)
 
 
 def create_token(
@@ -43,6 +49,8 @@ def create_token(
         "iat": int(issued_at.timestamp()),
         "exp": int((issued_at + expires_delta).timestamp()),
     }
+    from jose import jwt
+
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
@@ -69,6 +77,8 @@ def create_refresh_token(*, subject: str, user_id: int, employee_id: int | None,
 
 
 def decode_token(token: str) -> dict[str, Any]:
+    from jose import JWTError, jwt
+
     try:
         return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except JWTError as exc:

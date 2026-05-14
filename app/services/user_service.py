@@ -213,6 +213,15 @@ def list_users(db: Session) -> list[UserRead]:
     return [serialize_user(user) for user in users]
 
 
+def list_roles(db: Session) -> list[RoleRead]:
+    roles = db.scalars(
+        select(Role)
+        .options(selectinload(Role.role_permissions).selectinload(RolePermission.permission))
+        .order_by(Role.code.asc())
+    ).all()
+    return [_serialize_role(role) for role in roles]
+
+
 def _get_role_assignments(role_ids: list[int], db: Session) -> list[Role]:
     roles = [get_role_or_404(role_id, db) for role_id in role_ids]
     if not roles:

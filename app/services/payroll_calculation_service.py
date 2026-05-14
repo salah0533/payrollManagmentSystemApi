@@ -886,3 +886,12 @@ def sync_vacation_with_payroll(employee_id: int, start_date: date, end_date: dat
     while current <= end_date:
         calculate_attendance_day(employee_id, current, db, trigger_reason=reason)
         current += timedelta(days=1)
+
+
+def list_payroll_periods(db: Session, *, limit: int = 24):
+    return db.scalars(
+        select(PayrollPeriod)
+        .options(selectinload(PayrollPeriod.payrolls))
+        .order_by(PayrollPeriod.start_date.desc(), PayrollPeriod.id.desc())
+        .limit(limit)
+    ).all()

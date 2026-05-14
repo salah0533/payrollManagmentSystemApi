@@ -11,6 +11,13 @@ from app.schemas.vacationBaseModel import VacationBaseModel,UpdateVacationBaseMo
 from datetime import date
 router = APIRouter()
 
+@router.get("/current")
+def get_current_vacations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("vacations.read_all")),
+):
+    return api_success(get_all_current_vacations(db))
+
 @router.get("/{year}")
 def get_vacations(
     year:int,
@@ -18,13 +25,6 @@ def get_vacations(
     current_user: User = Depends(require_permissions("vacations.read_all")),
 ):
     return api_success(get_all_vacations(year,db))
-
-@router.get("/current")
-def get_current_vacations(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permissions("vacations.read_all")),
-):
-    return api_success(get_all_current_vacations(db))
 
 @router.get("/{id}/{start}/{end}")
 def get_emp_vacations(
