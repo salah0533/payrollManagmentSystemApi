@@ -30,7 +30,7 @@ from app.services.policy_service import (
 )
 
 
-FINAL_PAYROLL_STATUSES = {"approved", "paid", "locked"}
+FINAL_PAYROLL_STATUSES = {"approved", "partially_paid", "paid", "locked"}
 RECALCULABLE_PAYROLL_STATUSES = {"draft", "needs_review"}
 
 
@@ -46,6 +46,12 @@ def _decimal(value, default: str = "0.00") -> Decimal:
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _sync_payroll_balance(payroll: EmployeePayroll) -> None:
+    payroll.total_amount = _money(_decimal(payroll.net_salary))
+    payroll.paid_amount = _money(_decimal(payroll.paid_amount))
+    payroll.balance_amount = _money(payroll.total_amount - payroll.paid_amount)
 
 
 def _get_employee_user_id(employee_id: int, db: Session) -> int | None:
@@ -273,6 +279,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
         "net_salary": str(net_salary),
+        "total_amount": str(net_salary),
     }
     return {
         "salary_type": compensation.salary_type,
@@ -286,6 +293,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "adjustment_amount": correction_amount,
         "gross_salary": gross_salary,
         "net_salary": net_salary,
+        "total_amount": net_salary,
         "calculation_data_json": calc_data,
     }
 
@@ -332,6 +340,7 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
         "net_salary": str(net_salary),
+        "total_amount": str(net_salary),
     }
     return {
         "salary_type": compensation.salary_type,
@@ -345,6 +354,7 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "adjustment_amount": correction_amount,
         "gross_salary": gross_salary,
         "net_salary": net_salary,
+        "total_amount": net_salary,
         "calculation_data_json": calc_data,
     }
 
@@ -375,6 +385,7 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
         "net_salary": str(net_salary),
+        "total_amount": str(net_salary),
     }
     return {
         "salary_type": compensation.salary_type,
@@ -388,6 +399,7 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "adjustment_amount": correction_amount,
         "gross_salary": gross_salary,
         "net_salary": net_salary,
+        "total_amount": net_salary,
         "calculation_data_json": calc_data,
     }
 
@@ -566,6 +578,7 @@ def calculate_employee_payroll(
 
     old_gross_salary = _decimal(payroll.gross_salary)
     old_net_salary = _decimal(payroll.net_salary)
+    old_balance_amount = _decimal(payroll.balance_amount)
     days = _load_period_attendance(employee_id, period, db)
     compensation = get_employee_compensation(employee_id, period.end_date, db)
 
@@ -580,6 +593,7 @@ def calculate_employee_payroll(
         if field_name == "calculation_data_json":
             continue
         setattr(payroll, field_name, value)
+    _sync_payroll_balance(payroll)
 
     payroll.status = "draft"
     payroll.calculated_at = _utc_now()
@@ -593,7 +607,11 @@ def calculate_employee_payroll(
         payroll.status = "needs_review"
 
     threshold = _decimal(get_or_create_payroll_policy(db).significant_change_threshold)
-    has_meaningful_change = abs(payroll.net_salary - old_net_salary) >= threshold or abs(payroll.gross_salary - old_gross_salary) >= threshold
+    has_meaningful_change = (
+        abs(payroll.net_salary - old_net_salary) >= threshold
+        or abs(payroll.gross_salary - old_gross_salary) >= threshold
+        or abs(payroll.balance_amount - old_balance_amount) >= threshold
+    )
     if force_history or has_meaningful_change:
         create_payroll_history_snapshot(
             payroll,
@@ -610,8 +628,15 @@ def calculate_employee_payroll(
         action="payroll_recalculated",
         entity_type="EmployeePayroll",
         entity_id=payroll.id,
-        old_data_json={"gross_salary": str(old_gross_salary), "net_salary": str(old_net_salary)},
-        new_data_json={"gross_salary": str(payroll.gross_salary), "net_salary": str(payroll.net_salary), "reason": reason},
+        old_data_json={"gross_salary": str(old_gross_salary), "net_salary": str(old_net_salary), "balance_amount": str(old_balance_amount)},
+        new_data_json={
+            "gross_salary": str(payroll.gross_salary),
+            "net_salary": str(payroll.net_salary),
+            "total_amount": str(payroll.total_amount),
+            "paid_amount": str(payroll.paid_amount),
+            "balance_amount": str(payroll.balance_amount),
+            "reason": reason,
+        },
         user_id=created_by,
     )
     db.flush()
@@ -722,38 +747,65 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
     return payroll
 
 
-def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: int | None = None):
+def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: int | None = None, amount=None, note: str | None = None):
     payroll = db.get(EmployeePayroll, employee_payroll_id)
     if not payroll:
         raise ResourceNotFoundException("Employee payroll")
 
     old_status = payroll.status
+    old_paid_amount = _decimal(payroll.paid_amount)
+    old_balance_amount = _decimal(payroll.balance_amount)
+    _sync_payroll_balance(payroll)
+
+    payment_amount = _money(_decimal(amount)) if amount is not None else payroll.balance_amount
+    if payment_amount == Decimal("0.00"):
+        raise BadRequestException("Payment amount cannot be zero")
+
+    payroll.paid_amount = _money(payroll.paid_amount + payment_amount)
+    _sync_payroll_balance(payroll)
+
     policy = get_or_create_payroll_policy(db)
-    payroll.status = "locked" if policy.lock_payroll_after_payment else "paid"
+    is_settled = payroll.balance_amount == Decimal("0.00")
+    payroll.status = "locked" if is_settled and policy.lock_payroll_after_payment else "paid" if is_settled else "partially_paid"
     payroll.paid_at = _utc_now()
     create_payroll_history_snapshot(
         payroll,
         old_gross_salary=_decimal(payroll.gross_salary),
         old_net_salary=_decimal(payroll.net_salary),
-        reason="payroll_paid",
-        calculation_data_json={"status_before": old_status, "status_after": payroll.status},
+        reason="payroll_payment_recorded",
+        calculation_data_json={
+            "status_before": old_status,
+            "status_after": payroll.status,
+            "payment_amount": str(payment_amount),
+            "old_paid_amount": str(old_paid_amount),
+            "new_paid_amount": str(payroll.paid_amount),
+            "old_balance_amount": str(old_balance_amount),
+            "new_balance_amount": str(payroll.balance_amount),
+            "note": note,
+        },
         db=db,
         created_by=paid_by,
     )
     save_audit_log(
         db,
-        action="payroll_paid",
+        action="payroll_payment_recorded",
         entity_type="EmployeePayroll",
         entity_id=payroll.id,
-        old_data_json={"status": old_status},
-        new_data_json={"status": payroll.status},
+        old_data_json={"status": old_status, "paid_amount": str(old_paid_amount), "balance_amount": str(old_balance_amount)},
+        new_data_json={
+            "status": payroll.status,
+            "payment_amount": str(payment_amount),
+            "paid_amount": str(payroll.paid_amount),
+            "balance_amount": str(payroll.balance_amount),
+            "note": note,
+        },
         user_id=paid_by,
     )
     _notify_employee_payroll_status(
         payroll=payroll,
         notification_type="payroll_paid",
-        title="Payroll paid",
-        message=f"Your payroll for period #{payroll.payroll_period_id} was marked as paid.",
+        title="Payroll payment recorded",
+        message=f"A payroll payment of {payment_amount} was recorded for period #{payroll.payroll_period_id}. Remaining balance: {payroll.balance_amount}.",
         actor_user_id=paid_by,
         db=db,
     )
@@ -854,6 +906,69 @@ def list_payroll_periods(db: Session):
         select(PayrollPeriod)
         .order_by(PayrollPeriod.start_date.desc(), PayrollPeriod.id.desc())
     ).all()
+
+
+def get_payroll_balance_report(db: Session, period_id: int | None = None, employee_id: int | None = None):
+    query = select(EmployeePayroll).options(selectinload(EmployeePayroll.employee))
+    if period_id is not None:
+        query = query.where(EmployeePayroll.payroll_period_id == period_id)
+    if employee_id is not None:
+        query = query.where(EmployeePayroll.employee_id == employee_id)
+    payrolls = db.scalars(query.order_by(EmployeePayroll.employee_id.asc(), EmployeePayroll.payroll_period_id.asc())).all()
+
+    employees: dict[int, dict] = {}
+    total_amount = Decimal("0.00")
+    paid_amount = Decimal("0.00")
+    balance_amount = Decimal("0.00")
+
+    for payroll in payrolls:
+        row_total = _money(_decimal(payroll.total_amount))
+        if row_total == Decimal("0.00") and _decimal(payroll.net_salary) != Decimal("0.00"):
+            row_total = _money(_decimal(payroll.net_salary))
+        row_paid = _money(_decimal(payroll.paid_amount))
+        row_balance = _money(row_total - row_paid)
+
+        total_amount += row_total
+        paid_amount += row_paid
+        balance_amount += row_balance
+
+        employee_name = getattr(payroll.employee, "fullname", None) or f"Employee #{payroll.employee_id}"
+        employee_row = employees.setdefault(
+            payroll.employee_id,
+            {
+                "employee_id": payroll.employee_id,
+                "employee_name": employee_name,
+                "total_amount": Decimal("0.00"),
+                "paid_amount": Decimal("0.00"),
+                "balance_amount": Decimal("0.00"),
+                "payroll_count": 0,
+            },
+        )
+        employee_row["total_amount"] += row_total
+        employee_row["paid_amount"] += row_paid
+        employee_row["balance_amount"] += row_balance
+        employee_row["payroll_count"] += 1
+
+    company_owes_employees = _money(sum((row["balance_amount"] for row in employees.values() if row["balance_amount"] > 0), Decimal("0.00")))
+    employees_owe_company = _money(sum((abs(row["balance_amount"]) for row in employees.values() if row["balance_amount"] < 0), Decimal("0.00")))
+
+    return {
+        "period_id": period_id,
+        "total_amount": _money(total_amount),
+        "paid_amount": _money(paid_amount),
+        "balance_amount": _money(balance_amount),
+        "company_owes_employees": company_owes_employees,
+        "employees_owe_company": employees_owe_company,
+        "employees": [
+            {
+                **row,
+                "total_amount": _money(row["total_amount"]),
+                "paid_amount": _money(row["paid_amount"]),
+                "balance_amount": _money(row["balance_amount"]),
+            }
+            for row in sorted(employees.values(), key=lambda item: (item["employee_name"].lower(), item["employee_id"]))
+        ],
+    }
 
 
 def get_employee_payroll_by_period(employee_id: int, period_id: int, db: Session):

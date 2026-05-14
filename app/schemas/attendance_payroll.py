@@ -167,6 +167,11 @@ class PayrollAdjustmentCreate(BaseModel):
         return value
 
 
+class PayrollPaymentRequest(BaseModel):
+    amount: Optional[Decimal] = None
+    note: Optional[str] = None
+
+
 class PayrollDiscrepancyResolveRequest(BaseModel):
     resolution_note: str
     resolved_by: Optional[int] = None
@@ -187,6 +192,9 @@ class EmployeePayrollRead(BaseModel):
     adjustment_amount: Decimal
     gross_salary: Decimal
     net_salary: Decimal
+    total_amount: Decimal
+    paid_amount: Decimal
+    balance_amount: Decimal
     status: str
     calculated_at: datetime
     reviewed_at: Optional[datetime]
@@ -195,6 +203,25 @@ class EmployeePayrollRead(BaseModel):
     notes: Optional[str]
 
     model_config = {"from_attributes": True}
+
+
+class PayrollEmployeeBalanceRead(BaseModel):
+    employee_id: int
+    employee_name: str
+    total_amount: Decimal
+    paid_amount: Decimal
+    balance_amount: Decimal
+    payroll_count: int
+
+
+class PayrollBalanceReportRead(BaseModel):
+    period_id: Optional[int] = None
+    total_amount: Decimal
+    paid_amount: Decimal
+    balance_amount: Decimal
+    company_owes_employees: Decimal
+    employees_owe_company: Decimal
+    employees: list[PayrollEmployeeBalanceRead]
 
 
 class PayrollPeriodRead(BaseModel):

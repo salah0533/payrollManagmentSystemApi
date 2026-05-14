@@ -4,6 +4,7 @@ venv
 *.db
 alembic.ini
 alembic/*
+!alembic/versions/
 alembic/env.py
-alembic/versions/
 alembic/versions/*
+!alembic/versions/e7b3c9d2a510_add_payroll_payment_balance_fields.py

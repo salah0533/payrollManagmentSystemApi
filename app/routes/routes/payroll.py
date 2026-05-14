@@ -5,13 +5,14 @@ from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_permissions, require_self_or_permission
 from app.models.auth import User
-from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollDiscrepancyResolveRequest
+from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollDiscrepancyResolveRequest, PayrollPaymentRequest
 from app.services.payroll_calculation_service import (
     add_payroll_adjustment,
     approve_employee_payroll,
     get_employee_payroll_by_period,
     get_payroll_discrepancies,
     get_payroll_history,
+    get_payroll_balance_report,
     get_payroll_period,
     list_payroll_periods,
     mark_employee_payroll_paid,
@@ -41,6 +42,16 @@ def get_period(
 ):
     period = get_payroll_period(period_id, db)
     return api_success(period)
+
+
+@router.get("/report")
+def get_balance_report(
+    period_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
+    report = get_payroll_balance_report(db, period_id=period_id)
+    return api_success(report)
 
 
 @router.get("/employee/{employee_id}/{period_id}")
@@ -90,10 +101,17 @@ def approve_payroll(
 @router.post("/mark-paid/{employee_payroll_id}")
 def mark_paid(
     employee_payroll_id: int,
+    req: PayrollPaymentRequest | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("payroll.mark_paid")),
 ):
-    payroll = mark_employee_payroll_paid(employee_payroll_id, db, paid_by=current_user.id)
+    payroll = mark_employee_payroll_paid(
+        employee_payroll_id,
+        db,
+        paid_by=current_user.id,
+        amount=req.amount if req else None,
+        note=req.note if req else None,
+    )
     return api_success(payroll)
 
 
