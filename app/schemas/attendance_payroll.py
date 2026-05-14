@@ -166,6 +166,66 @@ class PayrollAdjustmentCreate(BaseModel):
             raise ValueError(f"adjustment_type must be one of {sorted(valid)}")
         return value
 
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("amount must be greater than zero")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("reason is required")
+        return value.strip()
+
+
+class PayrollAdjustmentUpdate(BaseModel):
+    adjustment_type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    reason: Optional[str] = None
+
+    @field_validator("adjustment_type")
+    @classmethod
+    def validate_adjustment_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        valid = set(PAYROLL_ADJUSTMENT_TYPE_CODES)
+        if value not in valid:
+            raise ValueError(f"adjustment_type must be one of {sorted(valid)}")
+        return value
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and value <= 0:
+            raise ValueError("amount must be greater than zero")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("reason cannot be empty")
+        return value.strip()
+
+
+class PayrollAdjustmentRead(BaseModel):
+    id: int
+    employee_payroll_id: int
+    payroll_period_id: int
+    employee_id: int
+    adjustment_type: str
+    amount: Decimal
+    reason: str
+    created_by: Optional[int]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
 
 class PayrollPaymentRequest(BaseModel):
     amount: Optional[Decimal] = None

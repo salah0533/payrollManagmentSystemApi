@@ -890,6 +890,101 @@ def add_payroll_adjustment(payload, db: Session):
     return adjustment
 
 
+def get_payroll_adjustments(employee_payroll_id: int, db: Session):
+    payroll = db.get(EmployeePayroll, employee_payroll_id)
+    if not payroll:
+        raise ResourceNotFoundException("Employee payroll")
+    return _load_adjustments(employee_payroll_id, db)
+
+
+def _get_editable_payroll_for_adjustment(adjustment: PayrollAdjustment, db: Session) -> EmployeePayroll:
+    payroll = db.get(EmployeePayroll, adjustment.employee_payroll_id)
+    if not payroll:
+        raise ResourceNotFoundException("Employee payroll")
+    period = db.get(PayrollPeriod, payroll.payroll_period_id)
+    if payroll.status in FINAL_PAYROLL_STATUSES or (period and period.status in FINAL_PAYROLL_STATUSES):
+        raise BadRequestException("Approved, paid, or locked payroll adjustments cannot be changed")
+    return payroll
+
+
+def update_payroll_adjustment(adjustment_id: int, payload, db: Session, updated_by: int | None = None):
+    adjustment = db.get(PayrollAdjustment, adjustment_id)
+    if not adjustment:
+        raise ResourceNotFoundException("Payroll adjustment")
+
+    payroll = _get_editable_payroll_for_adjustment(adjustment, db)
+    old_data = {
+        "adjustment_type": adjustment.adjustment_type,
+        "amount": str(adjustment.amount),
+        "reason": adjustment.reason,
+    }
+
+    update_data = payload.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(adjustment, key, value)
+
+    db.add(adjustment)
+    db.flush()
+    calculate_employee_payroll(
+        employee_id=payroll.employee_id,
+        payroll_period_id=payroll.payroll_period_id,
+        db=db,
+        reason="payroll_adjustment_updated",
+        created_by=updated_by,
+        force_history=True,
+    )
+    save_audit_log(
+        db,
+        action="payroll_adjustment_updated",
+        entity_type="PayrollAdjustment",
+        entity_id=adjustment.id,
+        old_data_json=old_data,
+        new_data_json={
+            "adjustment_type": adjustment.adjustment_type,
+            "amount": str(adjustment.amount),
+            "reason": adjustment.reason,
+        },
+        user_id=updated_by,
+    )
+    db.commit()
+    db.refresh(adjustment)
+    return adjustment
+
+
+def delete_payroll_adjustment(adjustment_id: int, db: Session, deleted_by: int | None = None):
+    adjustment = db.get(PayrollAdjustment, adjustment_id)
+    if not adjustment:
+        raise ResourceNotFoundException("Payroll adjustment")
+
+    payroll = _get_editable_payroll_for_adjustment(adjustment, db)
+    old_data = {
+        "adjustment_type": adjustment.adjustment_type,
+        "amount": str(adjustment.amount),
+        "reason": adjustment.reason,
+    }
+    db.delete(adjustment)
+    db.flush()
+    calculate_employee_payroll(
+        employee_id=payroll.employee_id,
+        payroll_period_id=payroll.payroll_period_id,
+        db=db,
+        reason="payroll_adjustment_deleted",
+        created_by=deleted_by,
+        force_history=True,
+    )
+    save_audit_log(
+        db,
+        action="payroll_adjustment_deleted",
+        entity_type="PayrollAdjustment",
+        entity_id=adjustment_id,
+        old_data_json=old_data,
+        user_id=deleted_by,
+    )
+    db.commit()
+    return {"deleted": True, "id": adjustment_id}
+
+
 def get_payroll_period(period_id: int, db: Session):
     period = db.scalar(
         select(PayrollPeriod)

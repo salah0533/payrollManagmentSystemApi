@@ -5,11 +5,13 @@ from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_permissions, require_self_or_permission
 from app.models.auth import User
-from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollDiscrepancyResolveRequest, PayrollPaymentRequest
+from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollAdjustmentUpdate, PayrollDiscrepancyResolveRequest, PayrollPaymentRequest
 from app.services.payroll_calculation_service import (
     add_payroll_adjustment,
     approve_employee_payroll,
     get_employee_payroll_by_period,
+    delete_payroll_adjustment,
+    get_payroll_adjustments,
     get_payroll_discrepancies,
     get_payroll_history,
     get_payroll_balance_report,
@@ -19,6 +21,7 @@ from app.services.payroll_calculation_service import (
     recalculate_payroll_period,
     resolve_payroll_discrepancy,
     calculate_employee_payroll,
+    update_payroll_adjustment,
 )
 
 
@@ -155,3 +158,34 @@ def create_adjustment(
     req.created_by = current_user.id
     adjustment = add_payroll_adjustment(req, db)
     return api_success(adjustment, status_code=201)
+
+
+@router.get("/adjustments/{employee_payroll_id}")
+def get_adjustments(
+    employee_payroll_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
+    adjustments = get_payroll_adjustments(employee_payroll_id, db)
+    return api_success(adjustments)
+
+
+@router.put("/adjustment/{adjustment_id}")
+def update_adjustment(
+    adjustment_id: int,
+    req: PayrollAdjustmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.adjust")),
+):
+    adjustment = update_payroll_adjustment(adjustment_id, req, db, updated_by=current_user.id)
+    return api_success(adjustment)
+
+
+@router.delete("/adjustment/{adjustment_id}")
+def delete_adjustment(
+    adjustment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.adjust")),
+):
+    result = delete_payroll_adjustment(adjustment_id, db, deleted_by=current_user.id)
+    return api_success(result)
