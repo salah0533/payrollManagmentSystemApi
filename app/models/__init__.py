@@ -1,4 +1,5 @@
 from app.models.employees import Employees
+from app.models.employee_reference import Department, Position
 from app.models.attendence import Attendence
 from app.models.attendance_payroll import (
     AttendanceCorrection,

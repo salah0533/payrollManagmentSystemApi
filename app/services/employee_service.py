@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.security import utc_now
 from app.exceptions.base_exception import ForbiddenException
 from app.models.auth import User
+from app.models.employee_reference import Department, Position
 from app.models.employees import Employees
 from app.schemas.user import EmployeeCreateRequest, EmployeeRead, EmployeeUpdateRequest, UserCreateRequest
 from app.services.audit_service import save_audit_log, serialize_model
@@ -37,7 +38,23 @@ def get_employee(id: int, db: Session) -> EmployeeRead:
     return serialize_employee(employee)
 
 
-def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | EmployeeUpdateRequest) -> None:
+def _get_department_or_404(department_id: int, db: Session) -> Department:
+    return get_resource_or_404(
+        db.scalar(select(Department).where(Department.id == department_id, Department.is_active.is_(True))),
+        resource_name="Department",
+        identifier=department_id,
+    )
+
+
+def _get_position_or_404(position_id: int, db: Session) -> Position:
+    return get_resource_or_404(
+        db.scalar(select(Position).where(Position.id == position_id, Position.is_active.is_(True))),
+        resource_name="Position",
+        identifier=position_id,
+    )
+
+
+def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | EmployeeUpdateRequest, db: Session) -> None:
     data = payload.model_dump(exclude_unset=True, by_alias=False)
 
     if "first_name" in data and data["first_name"] is not None:
@@ -52,8 +69,20 @@ def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | 
     if "phone" in data and data["phone"] is not None:
         employee.phone = data["phone"]
     if "department_id" in data:
+        if data["department_id"] is not None:
+            _get_department_or_404(data["department_id"], db)
         employee.department_id = data["department_id"]
-    if "position" in data:
+    if "position_id" in data:
+        if data["position_id"] is not None:
+            position = _get_position_or_404(data["position_id"], db)
+            employee.position = position.name
+            employee.job_title = position.name
+        elif "position" in data:
+            employee.position = data["position"]
+            if data["position"] is not None:
+                employee.job_title = data["position"]
+        employee.position_id = data["position_id"]
+    if "position" in data and "position_id" not in data:
         employee.position = data["position"]
         if data["position"] is not None:
             employee.job_title = data["position"]
@@ -100,6 +129,7 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
         phone=payload.phone,
         email=payload.email,
         department_id=payload.department_id,
+        position_id=payload.position_id,
         position=payload.position,
         status=payload.status.value if hasattr(payload.status, "value") else str(payload.status),
         hire_date=payload.hire_date or payload.joined or date.today(),
@@ -116,7 +146,7 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
         min_extraTime=payload.min_extraTime,
         joined=payload.hire_date or payload.joined or date.today(),
     )
-    _sync_employee_fields(employee, payload)
+    _sync_employee_fields(employee, payload, db)
     db.add(employee)
     db.flush()
 
@@ -159,7 +189,7 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
     )
 
     old_data = serialize_model(employee)
-    _sync_employee_fields(employee, payload)
+    _sync_employee_fields(employee, payload, db)
     db.add(employee)
     db.flush()
     save_audit_log(

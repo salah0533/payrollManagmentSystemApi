@@ -157,6 +157,7 @@ def serialize_employee(employee: Employees) -> EmployeeRead:
         email=employee.email,
         phone=employee.phone,
         department_id=employee.department_id,
+        position_id=employee.position_id,
         position=employee.position,
         status=employee.status,
         hire_date=employee.hire_date,
@@ -211,6 +212,35 @@ def list_users(db: Session) -> list[UserRead]:
         .order_by(User.created_at.asc(), User.id.asc())
     ).all()
     return [serialize_user(user) for user in users]
+
+
+def list_roles(db: Session) -> list[RoleRead]:
+    roles = db.scalars(
+        select(Role)
+        .options(selectinload(Role.role_permissions).selectinload(RolePermission.permission))
+        .order_by(Role.code.asc())
+    ).all()
+    return [_serialize_role(role) for role in roles]
+
+
+def list_employees_without_accounts(db: Session, *, include_user_id: int | None = None) -> list[EmployeeRead]:
+    linked_employee_ids = select(User.employee_id).where(
+        User.deleted_at.is_(None),
+        User.employee_id.is_not(None),
+    )
+    if include_user_id is not None:
+        linked_employee_ids = linked_employee_ids.where(User.id != include_user_id)
+
+    employees = db.scalars(
+        select(Employees)
+        .options(selectinload(Employees.user_account))
+        .where(
+            Employees.deleted_at.is_(None),
+            Employees.id.not_in(linked_employee_ids),
+        )
+        .order_by(Employees.fullname.asc(), Employees.id.asc())
+    ).all()
+    return [serialize_employee(employee) for employee in employees]
 
 
 def _get_role_assignments(role_ids: list[int], db: Session) -> list[Role]:

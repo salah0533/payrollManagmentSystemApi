@@ -14,6 +14,7 @@ class Employees(Base):
     phone = Column(String(14),nullable=False)
     email = Column(String(255))
     department_id = Column(Integer, nullable=True, index=True)
+    position_id = Column(Integer, nullable=True, index=True)
     position = Column(String(100), nullable=True)
     status = Column(String(20), nullable=False, default="active", index=True)
     hire_date = Column(Date, nullable=True)
@@ -56,6 +57,7 @@ class Employees(Base):
             "last_name": self.last_name,
             "fullname":self.fullname,
             "department_id": self.department_id,
+            "position_id": self.position_id,
             "position": self.position,
             "status": self.status,
             "hire_date": self.hire_date,

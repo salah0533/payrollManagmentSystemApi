@@ -31,6 +31,27 @@ class RoleRead(BaseModel):
     permissions: list[PermissionRead] = []
 
 
+class EmployeeReferenceCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return " ".join(value.strip().split())
+
+
+class DepartmentRead(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+
+
+class PositionRead(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+
+
 class UserRead(BaseModel):
     id: int
     employee_id: int | None
@@ -89,6 +110,7 @@ class EmployeeBasePayload(BaseModel):
     email: Optional[EmailStr] = None
     phone: str = Field(..., min_length=3, max_length=20)
     department_id: Optional[int] = None
+    position_id: Optional[int] = None
     position: Optional[str] = Field(None, max_length=100)
     status: EmployeeStatus = EmployeeStatus.active
     hire_date: Optional[date] = None
@@ -136,6 +158,7 @@ class EmployeeUpdateRequest(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     department_id: Optional[int] = None
+    position_id: Optional[int] = None
     position: Optional[str] = None
     status: Optional[EmployeeStatus] = None
     hire_date: Optional[date] = None
@@ -160,6 +183,7 @@ class EmployeeRead(BaseModel):
     email: Optional[EmailStr] = None
     phone: str
     department_id: Optional[int] = None
+    position_id: Optional[int] = None
     position: Optional[str] = None
     status: str
     hire_date: Optional[date] = None
