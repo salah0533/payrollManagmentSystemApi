@@ -13,6 +13,7 @@ from app.services.payroll_calculation_service import (
     get_payroll_discrepancies,
     get_payroll_history,
     get_payroll_period,
+    list_payroll_periods,
     mark_employee_payroll_paid,
     recalculate_payroll_period,
     resolve_payroll_discrepancy,
@@ -21,6 +22,15 @@ from app.services.payroll_calculation_service import (
 
 
 router = APIRouter()
+
+
+@router.get("/periods")
+def get_period_list(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
+    periods = list_payroll_periods(db)
+    return api_success(periods)
 
 
 @router.get("/period/{period_id}")

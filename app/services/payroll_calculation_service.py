@@ -849,6 +849,13 @@ def get_payroll_period(period_id: int, db: Session):
     return period
 
 
+def list_payroll_periods(db: Session):
+    return db.scalars(
+        select(PayrollPeriod)
+        .order_by(PayrollPeriod.start_date.desc(), PayrollPeriod.id.desc())
+    ).all()
+
+
 def get_employee_payroll_by_period(employee_id: int, period_id: int, db: Session):
     payroll = db.scalar(
         select(EmployeePayroll).where(

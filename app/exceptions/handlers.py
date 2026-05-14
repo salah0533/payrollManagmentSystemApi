@@ -53,6 +53,15 @@ def _format_validation_errors(errors: Iterable[dict[str, Any]]) -> list[dict[str
     return formatted
 
 
+def _validation_message(errors: list[dict[str, str]]) -> str:
+    if not errors:
+        return "Validation failed"
+    first_error = errors[0]
+    field = first_error.get("field") or first_error.get("location") or "request"
+    message = first_error.get("message") or "Invalid value"
+    return f"{field}: {message}"
+
+
 def _normalize_http_exception(http_exc: HTTPException) -> tuple[str, list[dict[str, Any]], str]:
     detail = http_exc.detail
     if isinstance(detail, str):
@@ -89,7 +98,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def handle_request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         errors = _format_validation_errors(exc.errors())
-        payload = _build_error_payload("Validation failed", error_code="validation_error", errors=errors)
+        payload = _build_error_payload(_validation_message(errors), error_code="validation_error", errors=errors)
         logger.info("%s %s -> validation failed: %s", request.method, request.url.path, errors)
         return _json_response(payload, status_code=422)
 

@@ -214,6 +214,22 @@ class PayrollPeriodRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PayrollPeriodSummaryRead(BaseModel):
+    id: int
+    name: str
+    start_date: date
+    end_date: date
+    status: str
+    generated_at: datetime
+    reviewed_at: Optional[datetime]
+    approved_at: Optional[datetime]
+    approved_by: Optional[int]
+    paid_at: Optional[datetime]
+    locked_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
 class PayrollDiscrepancyRead(BaseModel):
     id: int
     employee_payroll_id: Optional[int]

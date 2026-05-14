@@ -188,7 +188,8 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
         raise BadRequestException("Cannot end break before break_start")
     if event_type == "break_end":
         break_start_event = next((item for item in existing_events if item.event_type == "break_start"), None)
-        if break_start_event and event_time <= break_start_event.event_time:
+        break_start_time = _normalize_event_time(break_start_event.event_time) if break_start_event else None
+        if break_start_time and event_time <= break_start_time:
             raise BadRequestException("break_end cannot be before break_start")
     if event_type == "check_out" and "check_in" not in by_type:
         raise BadRequestException("Cannot check out before check-in")
@@ -196,7 +197,8 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
         raise BadRequestException("Duplicate check_out is not allowed")
     if event_type == "check_out":
         check_in_event = next((item for item in existing_events if item.event_type == "check_in"), None)
-        if check_in_event and event_time <= check_in_event.event_time:
+        check_in_time = _normalize_event_time(check_in_event.event_time) if check_in_event else None
+        if check_in_time and event_time <= check_in_time:
             raise BadRequestException("check_out cannot be before check_in")
 
     if WEEKDAY_NAMES[work_date.weekday()] in {day.lower() for day in (schedule.weekly_off_days or [])}:

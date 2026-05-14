@@ -15,6 +15,7 @@ from app.schemas.user import SelfAttendanceActionRequest, SelfVacationRequestCre
 from app.schemas.vacationBaseModel import VacationBaseModel
 from app.services.attendance_calculation_service import create_attendance_event, get_attendance_days
 from app.services.notification_service import NotificationService
+from app.services.payroll_calculation_service import list_payroll_periods
 from app.services.user_service import get_employee_or_404, serialize_employee
 from app.services.vacation_service import add_vacation, get_emp_all_vacations, overlab_check
 
@@ -56,6 +57,14 @@ def get_my_payroll(
 
     payroll = get_employee_payroll_by_period(_current_employee_id(current_user), period_id, db)
     return api_success(EmployeePayrollRead.model_validate(payroll))
+
+
+@router.get("/payroll-periods")
+def get_my_payroll_periods(
+    current_user: User = Depends(require_permissions("payroll.read_own")),
+    db: Session = Depends(get_db),
+):
+    return api_success(list_payroll_periods(db))
 
 
 @router.get("/vacations")

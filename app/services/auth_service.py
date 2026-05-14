@@ -15,11 +15,11 @@ from app.services.user_service import get_user_by_identifier, get_user_or_404, s
 def authenticate_user(identifier: str, password: str, db: Session) -> User:
     user = get_user_by_identifier(identifier, db)
     if not user:
-        raise UnauthorizedException("Invalid credentials")
+        raise UnauthorizedException("Username or email was not found")
     if not user.is_active:
         raise ForbiddenException("Inactive users cannot log in")
     if not verify_password(password, user.password_hash):
-        raise UnauthorizedException("Invalid credentials")
+        raise UnauthorizedException("Password is incorrect")
     return user
 
 
