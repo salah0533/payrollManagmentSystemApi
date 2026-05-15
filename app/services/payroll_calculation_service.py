@@ -14,6 +14,7 @@ from app.models.attendance_payroll import (
     PayrollDiscrepancy,
     PayrollPeriod,
 )
+from app.models.payments import Payments
 from app.models.auth import User
 from app.models.employees import Employees
 from app.models.types.vacationStatus import VacationStatuses
@@ -32,6 +33,13 @@ from app.services.policy_service import (
 
 FINAL_PAYROLL_STATUSES = {"approved", "partially_paid", "paid", "locked"}
 RECALCULABLE_PAYROLL_STATUSES = {"draft", "needs_review"}
+MANAGED_DISCREPANCY_TYPES = {
+    "missing_attendance",
+    "missing_checkout",
+    "missing_checkin",
+    "attendance_requires_review",
+    "vacation_overlap",
+}
 
 
 def _utc_now() -> datetime:
@@ -52,6 +60,15 @@ def _sync_payroll_balance(payroll: EmployeePayroll) -> None:
     payroll.total_amount = _money(_decimal(payroll.net_salary))
     payroll.paid_amount = _money(_decimal(payroll.paid_amount))
     payroll.balance_amount = _money(payroll.total_amount - payroll.paid_amount)
+
+
+def _set_attendance_review_status_for_period(employee_id: int, period: PayrollPeriod, review_status: str, db: Session) -> None:
+    days = _load_period_attendance(employee_id, period, db)
+    for day in days:
+        day.review_status = review_status
+        if review_status == "locked":
+            day.locked_at = _utc_now()
+        db.add(day)
 
 
 def _get_employee_user_id(employee_id: int, db: Session) -> int | None:
@@ -482,6 +499,32 @@ def _upsert_discrepancy(
     return discrepancy
 
 
+def _resolve_discrepancy(
+    discrepancy: PayrollDiscrepancy,
+    resolution_note: str,
+    db: Session,
+    resolved_by: int | None = None,
+) -> PayrollDiscrepancy:
+    if discrepancy.status == "resolved":
+        return discrepancy
+
+    discrepancy.status = "resolved"
+    discrepancy.resolution_note = resolution_note
+    discrepancy.resolved_by = resolved_by
+    discrepancy.resolved_at = _utc_now()
+    db.add(discrepancy)
+    save_audit_log(
+        db,
+        action="payroll_discrepancy_auto_resolved" if resolved_by is None else "payroll_discrepancy_resolved",
+        entity_type="PayrollDiscrepancy",
+        entity_id=discrepancy.id,
+        old_data_json={"status": "open"},
+        new_data_json={"status": discrepancy.status, "resolution_note": resolution_note},
+        user_id=resolved_by,
+    )
+    return discrepancy
+
+
 def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: Session):
     period = db.get(PayrollPeriod, payroll_period_id)
     if not period:
@@ -494,31 +537,25 @@ def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: S
     working_days = get_working_days(period.start_date, period.end_date, schedule, holidays)
     days = _load_period_attendance(employee_id, period, db)
     days_by_date = {item.work_date: item for item in days}
+    expected_open: dict[tuple[str, str], str] = {}
+
+    def expect(discrepancy_type: str, description: str, severity: str) -> None:
+        expected_open[(discrepancy_type, description)] = severity
 
     for work_day in working_days:
         day = days_by_date.get(work_day)
         if not day:
-            _upsert_discrepancy(
-                payroll=payroll,
-                period=period,
-                employee_id=employee_id,
-                discrepancy_type="missing_attendance",
-                description=f"Missing attendance snapshot for {work_day.isoformat()}",
-                severity="medium",
-                db=db,
-            )
+            expect("missing_attendance", f"Missing attendance snapshot for {work_day.isoformat()}", "medium")
             continue
 
         if day.status == "incomplete":
             discrepancy_type = "missing_checkout" if day.check_in_time and not day.check_out_time else "missing_checkin"
-            _upsert_discrepancy(
-                payroll=payroll,
-                period=period,
-                employee_id=employee_id,
-                discrepancy_type=discrepancy_type,
-                description=f"Incomplete attendance on {work_day.isoformat()}",
-                severity="high",
-                db=db,
+            expect(discrepancy_type, f"Incomplete attendance on {work_day.isoformat()}", "high")
+        if day.review_status not in {"approved", "locked"}:
+            expect(
+                "attendance_requires_review",
+                f"Attendance on {work_day.isoformat()} is not approved for payroll usage",
+                "medium",
             )
 
     vacations = db.scalars(
@@ -535,16 +572,41 @@ def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: S
         while current <= last:
             day = days_by_date.get(current)
             if day and (day.check_in_time or day.check_out_time):
-                _upsert_discrepancy(
-                    payroll=payroll,
-                    period=period,
-                    employee_id=employee_id,
-                    discrepancy_type="vacation_overlap",
-                    description=f"Vacation overlaps attendance on {current.isoformat()}",
-                    severity="medium",
-                    db=db,
-                )
+                expect("vacation_overlap", f"Vacation overlaps attendance on {current.isoformat()}", "medium")
             current += timedelta(days=1)
+
+    open_discrepancies = db.scalars(
+        select(PayrollDiscrepancy).where(
+            PayrollDiscrepancy.payroll_period_id == payroll_period_id,
+            PayrollDiscrepancy.employee_id == employee_id,
+            PayrollDiscrepancy.status == "open",
+        )
+    ).all()
+    existing_open = {
+        (item.discrepancy_type, item.description): item
+        for item in open_discrepancies
+    }
+
+    for (discrepancy_type, description), severity in expected_open.items():
+        if (discrepancy_type, description) in existing_open:
+            continue
+        _upsert_discrepancy(
+            payroll=payroll,
+            period=period,
+            employee_id=employee_id,
+            discrepancy_type=discrepancy_type,
+            description=description,
+            severity=severity,
+            db=db,
+        )
+
+    for discrepancy in open_discrepancies:
+        key = (discrepancy.discrepancy_type, discrepancy.description)
+        if discrepancy.discrepancy_type not in MANAGED_DISCREPANCY_TYPES:
+            continue
+        if key in expected_open:
+            continue
+        _resolve_discrepancy(discrepancy, "Automatically resolved during payroll reconciliation", db)
 
     return db.scalars(
         select(PayrollDiscrepancy)
@@ -670,34 +732,96 @@ def recalculate_payroll_period(payroll_period_id: int, db: Session, created_by: 
     return payrolls
 
 
-def sync_payroll_with_attendance_day(day: AttendanceDay, db: Session, trigger_reason: str = "attendance_change"):
-    period = get_or_create_payroll_period_for_date(day.work_date, db)
-    payroll = _get_employee_payroll(day.employee_id, period.id, db)
+def sync_payroll_with_attendance_context(employee_id: int, work_date: date, db: Session, trigger_reason: str = "attendance_change") -> dict[str, object]:
+    period = get_or_create_payroll_period_for_date(work_date, db)
+    payroll = _get_employee_payroll(employee_id, period.id, db)
     policy = get_or_create_payroll_policy(db)
 
     if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
         _upsert_discrepancy(
             payroll=payroll,
             period=period,
-            employee_id=day.employee_id,
+            employee_id=employee_id,
             discrepancy_type="attendance_changed_after_approval",
-            description=f"Attendance changed on {day.work_date.isoformat()} after payroll was finalized",
+            description=f"Attendance changed on {work_date.isoformat()} after payroll was finalized",
             severity="high",
             db=db,
         )
-        return payroll
+        return {
+            "status": "discrepancy_created",
+            "payroll_id": payroll.id,
+            "payroll_status": payroll.status,
+            "payroll_period_id": period.id,
+        }
 
     if not policy.auto_recalculate_draft_payroll:
-        return payroll
+        return {
+            "status": "skipped",
+            "payroll_id": payroll.id,
+            "payroll_status": payroll.status,
+            "payroll_period_id": period.id,
+        }
 
-    force_history = trigger_reason in {"attendance_correction", "vacation_approved", "vacation_rejected", "payroll_adjustment"}
-    return calculate_employee_payroll(
-        employee_id=day.employee_id,
+    force_history = trigger_reason in {
+        "attendance_correction",
+        "attendance_delete",
+        "smart_status_correction",
+        "vacation_approved",
+        "vacation_rejected",
+        "payroll_adjustment",
+    }
+    payroll = calculate_employee_payroll(
+        employee_id=employee_id,
         payroll_period_id=period.id,
         db=db,
         reason=trigger_reason,
         force_history=force_history,
     )
+    return {
+        "status": "recalculated",
+        "payroll_id": payroll.id,
+        "payroll_status": payroll.status,
+        "payroll_period_id": period.id,
+    }
+
+
+def sync_payroll_with_attendance_review(employee_id: int, work_date: date, db: Session) -> dict[str, object]:
+    period = get_or_create_payroll_period_for_date(work_date, db)
+    payroll = _get_employee_payroll(employee_id, period.id, db)
+
+    if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
+        detect_payroll_discrepancies(employee_id, period.id, db)
+        return {
+            "status": "review_reconciled",
+            "payroll_id": payroll.id,
+            "payroll_status": payroll.status,
+            "payroll_period_id": period.id,
+        }
+
+    payroll = calculate_employee_payroll(
+        employee_id=employee_id,
+        payroll_period_id=period.id,
+        db=db,
+        reason="attendance_review",
+        force_history=False,
+    )
+    return {
+        "status": "recalculated",
+        "payroll_id": payroll.id,
+        "payroll_status": payroll.status,
+        "payroll_period_id": period.id,
+    }
+
+
+def sync_payroll_with_attendance_day(day: AttendanceDay, db: Session, trigger_reason: str = "attendance_change"):
+    result = sync_payroll_with_attendance_context(
+        employee_id=day.employee_id,
+        work_date=day.work_date,
+        db=db,
+        trigger_reason=trigger_reason,
+    )
+    payroll_id = result.get("payroll_id")
+    return db.get(EmployeePayroll, payroll_id) if payroll_id else None
 
 
 def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by: int | None = None):
@@ -760,6 +884,10 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
     payment_amount = _money(_decimal(amount)) if amount is not None else payroll.balance_amount
     if payment_amount == Decimal("0.00"):
         raise BadRequestException("Payment amount cannot be zero")
+    if payment_amount < Decimal("0.00"):
+        raise BadRequestException("Payment amount cannot be negative")
+    if payment_amount > payroll.balance_amount:
+        raise BadRequestException("Payment amount cannot exceed the remaining payroll balance")
 
     payroll.paid_amount = _money(payroll.paid_amount + payment_amount)
     _sync_payroll_balance(payroll)
@@ -768,6 +896,20 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
     is_settled = payroll.balance_amount == Decimal("0.00")
     payroll.status = "locked" if is_settled and policy.lock_payroll_after_payment else "paid" if is_settled else "partially_paid"
     payroll.paid_at = _utc_now()
+    period = db.get(PayrollPeriod, payroll.payroll_period_id)
+    if period:
+        _set_attendance_review_status_for_period(payroll.employee_id, period, "locked", db)
+    payment_record = Payments(
+        employee_id=payroll.employee_id,
+        employee_payroll_id=payroll.id,
+        date=_utc_now(),
+        amount=payment_amount,
+        payment_type=0,
+        description=note or f"Payroll payment for period #{payroll.payroll_period_id}",
+        start=period.start_date if period else None,
+        end=period.end_date if period else None,
+    )
+    db.add(payment_record)
     create_payroll_history_snapshot(
         payroll,
         old_gross_salary=_decimal(payroll.gross_salary),

@@ -29,8 +29,11 @@ class AttendanceActionRequest(BaseModel):
 class AttendanceCorrectionRequest(BaseModel):
     employee_id: int
     work_date: date
-    field_changed: str
+    correction_type: str = "field"
+    field_changed: Optional[str] = None
     new_value: Optional[str] = None
+    target_status: Optional[str] = None
+    options: dict[str, Any] = Field(default_factory=dict)
     original_event_id: Optional[int] = None
     reason: str
     corrected_by: Optional[int] = None
@@ -42,12 +45,58 @@ class AttendanceCorrectionRequest(BaseModel):
             raise ValueError("reason is required")
         return value.strip()
 
+    @field_validator("correction_type")
+    @classmethod
+    def validate_correction_type(cls, value: str) -> str:
+        valid = {"field", "smart_status"}
+        if value not in valid:
+            raise ValueError(f"correction_type must be one of {sorted(valid)}")
+        return value
+
     @field_validator("field_changed")
     @classmethod
-    def validate_field_changed(cls, value: str) -> str:
+    def validate_field_changed(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
         valid = {"check_in_time", "break_start_time", "break_end_time", "check_out_time", "status"}
         if value not in valid:
             raise ValueError(f"field_changed must be one of {sorted(valid)}")
+        return value
+
+    @model_validator(mode="after")
+    def validate_correction_payload(self):
+        if self.correction_type == "field" and not self.field_changed:
+            raise ValueError("field_changed is required for field corrections")
+        if self.correction_type == "smart_status" and not self.target_status:
+            raise ValueError("target_status is required for smart status corrections")
+        return self
+
+
+class AttendanceSmartCorrectionRequest(BaseModel):
+    target_status: str
+    reason: str
+    options: dict[str, Any] = Field(default_factory=dict)
+    corrected_by: Optional[int] = None
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("reason is required")
+        return value.strip()
+
+
+class AttendanceReviewRequest(BaseModel):
+    review_status: str
+    note: Optional[str] = None
+    reviewed_by: Optional[int] = None
+
+    @field_validator("review_status")
+    @classmethod
+    def validate_review_status(cls, value: str) -> str:
+        valid = {"draft", "needs_review", "approved", "locked"}
+        if value not in valid:
+            raise ValueError(f"review_status must be one of {sorted(valid)}")
         return value
 
 
@@ -92,6 +141,10 @@ class AttendanceDayRead(BaseModel):
     absence_minutes: int
     unpaid_minutes: int
     status: str
+    review_status: str
+    reviewed_at: Optional[datetime]
+    reviewed_by: Optional[int]
+    locked_at: Optional[datetime]
     is_manually_corrected: bool
     calculated_at: datetime
     created_at: datetime

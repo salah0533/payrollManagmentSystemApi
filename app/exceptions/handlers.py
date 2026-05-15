@@ -54,12 +54,7 @@ def _format_validation_errors(errors: Iterable[dict[str, Any]]) -> list[dict[str
 
 
 def _validation_message(errors: list[dict[str, str]]) -> str:
-    if not errors:
-        return "Validation failed"
-    first_error = errors[0]
-    field = first_error.get("field") or first_error.get("location") or "request"
-    message = first_error.get("message") or "Invalid value"
-    return f"{field}: {message}"
+    return "Validation failed"
 
 
 def _normalize_http_exception(http_exc: HTTPException) -> tuple[str, list[dict[str, Any]], str]:

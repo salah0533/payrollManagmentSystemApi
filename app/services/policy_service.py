@@ -1,6 +1,8 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from dateutil import tz
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -36,6 +38,17 @@ def _decimal(value, default: str = "0.00") -> Decimal:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def get_schedule_timezone(schedule: WorkSchedule) -> tzinfo:
+    timezone_name = (schedule.timezone or "UTC").strip() or "UTC"
+    if timezone_name.upper() == "UTC":
+        return timezone.utc
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        fallback_timezone = tz.gettz(timezone_name)
+        return fallback_timezone or timezone.utc
 
 
 def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
@@ -101,6 +114,13 @@ def get_employee_schedule(employee_id: int, target_date: date, db: Session) -> W
 
 def get_default_work_schedule(db: Session) -> WorkSchedule:
     return get_employee_schedule(0, date.today(), db)
+
+
+def get_local_day_bounds(target_date: date, schedule: WorkSchedule) -> tuple[datetime, datetime]:
+    tz = get_schedule_timezone(schedule)
+    start_local = datetime.combine(target_date, time.min, tzinfo=tz)
+    end_local = datetime.combine(target_date, time.max, tzinfo=tz)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
 def update_default_work_schedule(db: Session, **values) -> WorkSchedule:

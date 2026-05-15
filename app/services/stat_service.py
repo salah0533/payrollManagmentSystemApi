@@ -1,131 +1,87 @@
+from datetime import date
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from sqlalchemy import select,func,extract
-from app.models.attendence import Attendence
-from app.models.types.attendenceTypes import AttendanceType
-from app.services.vacation_service import get_all_current_vacations, get_emp_all_vacations
-from app.utility.helper import hours_between , dates_between_skip_friday
+
+from app.models.attendance_payroll import AttendanceDay
 from app.models.employees import Employees
-from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
-from datetime import datetime,date
-from dateutil.relativedelta import relativedelta
-import calendar
-
-def att_stat(emp_id,start,end,db:Session):
-    emp = db.get(Employees,emp_id)
-    if not emp :
-        raise EmployeeNotFound("employee not found")
-    salary_type = emp.salary_type
-    diff = relativedelta(end,start)
-    att = {
-        "salary_type":emp.salary_type_tab.salary_type,
-        "month_price":emp.monthly_price,
-        "day_price":emp.day_price,
-        "hour_price":emp.hour_price,
-        "overtime_price":emp.extra_hours_price,
-        "duration":{
-            "months":diff.months,
-            "days":diff.days,
-        },"attendance":{
-            "days":0,
-            "hours":0
-        },"present":0,
-        "absent":0,
-        "late":0,
-        "overtime":0,
-        "paid_vacation":0,
-        "not_paid_vacation":0,
-        "not_selected":0,
-    }
+from app.models.types.vacationStatus import VacationStatuses
+from app.models.vacation import Vacation
+from app.services.policy_service import get_default_work_schedule, get_working_days, get_or_create_payroll_policy, parse_holidays
 
 
-    res = db.scalars(
-        select(Attendence)
-            .where(
-                Attendence.employee_id == emp_id,
-                Attendence.date <= end,
-                Attendence.date >= start 
-            )
-        ).all()
-    expected_work = float(emp.daily_work_hours)
-    all_days = dates_between_skip_friday(start,end)
-    all_vac = get_emp_all_vacations(emp_id,db)
-    for a in res:
-        b = True
-        if a.date in all_days:
-
-            if a.attendence_type == AttendanceType.Presnt:
-                att["present"] +=1
-                if salary_type in [0,1]:
-                    att["attendance"]["days"]  +=1
-                elif salary_type==2:
-                    entry_time = datetime.combine(date.today(),a.entry_time)
-                    exit_time = datetime.combine(date.today(),a.exit_time)
-                    att["attendance"]["hours"] +=  (exit_time - entry_time).total_seconds() / 3600
-            elif a.attendence_type == AttendanceType.Absent:
-                att["absent"] +=1
-            elif a.attendence_type == AttendanceType.LATE:
-                att["late"] += expected_work -  hours_between(a.entry_time , a.exit_time)
-                att["present"] += 1
-                if salary_type in [0,1]:
-                    att["attendance"]["days"]  +=1
-            elif a.attendence_type == AttendanceType.OVERTIME:
-                att["overtime"] += hours_between(a.entry_time , a.exit_time) - expected_work
-                att["present"] += 1
-                if salary_type in [0,1]:
-                    att["attendance"]["days"]  +=1
-            elif a.attendence_type == AttendanceType.PAID_VACATION:
-                att["paid_vacation"] +=1
-                if salary_type in [0,1]:
-                    att["attendance"]["days"] +=1
-                elif salary_type==2:
-                    att["attendance"]["hours"] += expected_work
-            elif a.attendence_type == AttendanceType.Not_PAID_VACATION:
-                att["not_paid_vacation"] +=1
-            all_days.remove(a.date)
-
-        else:
-            for vac in all_vac:
-                if  a.date >= vac.start_date and a.date <= vac.end_date:
-                    if vac.is_paid:
-                        att["paid_vacation"] +=1
-                        b = False
-                    else:
-                        att["not_paid_vacation"] +=1
-                        b = False
-            if b:
-                att["not_selected"] +=1
-    return att
-
-def dashbord_card_stat(db: Session):
-    total_emps = db.scalar(
-        select(func.count(Employees.id))
-    )
-
-    total_active_emps = db.scalar(
-        select(func.count(Employees.id))
-        .where(Employees.is_active.is_(True))
-    )
+def dashboard_attendance_stats(db: Session) -> dict[str, int | float]:
+    total_emps = db.scalar(select(func.count(Employees.id))) or 0
+    total_active_emps = db.scalar(select(func.count(Employees.id)).where(Employees.is_active.is_(True))) or 0
 
     today = date.today()
-    day = date.today().day
-    month = today.month
-    year = today.year
+    month_start = today.replace(day=1)
+    schedule = get_default_work_schedule(db)
+    policy = get_or_create_payroll_policy(db)
+    holidays = parse_holidays(policy.holidays_json)
+    workdays_so_far = [item for item in get_working_days(month_start, today, schedule, holidays) if item <= today]
 
-    total_att = db.scalar(
-        select(func.count(Attendence.id))
-        .where(
-            Attendence.attendence_type == AttendanceType.Presnt,
-            extract("month", Attendence.date) == month,
-            extract("year", Attendence.date) == year
+    monthly_days = db.scalars(
+        select(AttendanceDay).where(
+            AttendanceDay.work_date >= month_start,
+            AttendanceDay.work_date <= today,
         )
-    )
-    total_possible = total_active_emps * day
+    ).all()
 
-    if total_possible == 0:
-        total_att_percent = 0
-    else:
-        total_att_percent = (total_att * 100) / total_possible
+    status_counts = {
+        "present_days": 0,
+        "late_days": 0,
+        "absent_days": 0,
+        "vacation_days": 0,
+        "weekly_off_days": 0,
+        "incomplete_days": 0,
+        "needs_review_days": 0,
+        "total_paid_minutes": 0,
+        "total_unpaid_minutes": 0,
+        "overtime_minutes": 0,
+    }
 
-    total_vacation = len(get_all_current_vacations(db))
+    attendance_credit_statuses = {"present", "late", "paid_vacation", "sick_leave"}
+    credited_days = 0
 
-    return total_emps, total_active_emps, total_att_percent,total_vacation
+    for day in monthly_days:
+        if day.status == "present":
+            status_counts["present_days"] += 1
+        elif day.status == "late":
+            status_counts["late_days"] += 1
+        elif day.status == "absent":
+            status_counts["absent_days"] += 1
+        elif day.status in {"paid_vacation", "unpaid_vacation", "sick_leave"}:
+            status_counts["vacation_days"] += 1
+        elif day.status == "weekly_off":
+            status_counts["weekly_off_days"] += 1
+        elif day.status == "incomplete":
+            status_counts["incomplete_days"] += 1
+
+        if day.review_status == "needs_review":
+            status_counts["needs_review_days"] += 1
+
+        status_counts["total_paid_minutes"] += int(day.normal_paid_minutes or 0)
+        status_counts["total_unpaid_minutes"] += int(day.unpaid_minutes or 0)
+        status_counts["overtime_minutes"] += int(day.overtime_minutes or 0)
+
+        if day.status in attendance_credit_statuses:
+            credited_days += 1
+
+    total_possible = total_active_emps * len(workdays_so_far)
+    total_att_percent = (credited_days * 100 / total_possible) if total_possible else 0
+    total_vacation = db.scalar(
+        select(func.count(Vacation.id)).where(
+            Vacation.vacation_status == int(VacationStatuses.approved),
+            Vacation.start_date <= today,
+            Vacation.end_date >= today,
+        )
+    ) or 0
+
+    return {
+        "total_emps": total_emps,
+        "total_active_emps": total_active_emps,
+        "total_att_percent": total_att_percent,
+        "total_vacation": total_vacation,
+        **status_counts,
+    }

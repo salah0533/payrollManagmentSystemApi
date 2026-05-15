@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, Time
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, Time, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -69,6 +69,10 @@ class PayrollPolicy(Base):
 
 class AttendanceDay(Base):
     __tablename__ = "attendance_day"
+    __table_args__ = (
+        UniqueConstraint("employee_id", "work_date", name="ux_attendance_day_employee_work_date"),
+        Index("ix_attendance_day_employee_work_date", "employee_id", "work_date"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -89,6 +93,10 @@ class AttendanceDay(Base):
     absence_minutes = Column(Integer, nullable=False, default=0)
     unpaid_minutes = Column(Integer, nullable=False, default=0)
     status = Column(String(32), nullable=False, default="absent")
+    review_status = Column(String(20), nullable=False, default="draft")
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by = Column(Integer, nullable=True)
+    locked_at = Column(DateTime(timezone=True), nullable=True)
     is_manually_corrected = Column(Boolean, nullable=False, default=False)
     calculated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -102,6 +110,9 @@ class AttendanceDay(Base):
 
 class AttendanceEvent(Base):
     __tablename__ = "attendance_event"
+    __table_args__ = (
+        Index("ix_attendance_event_employee_event_time", "employee_id", "event_time"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -125,8 +136,13 @@ class AttendanceCorrection(Base):
     employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     original_event_id = Column(Integer, ForeignKey("attendance_event.id", ondelete="SET NULL"), nullable=True)
     field_changed = Column(String(50), nullable=False)
+    correction_type = Column(String(20), nullable=False, default="field")
+    target_status = Column(String(32), nullable=True)
     old_value = Column(String(255), nullable=True)
     new_value = Column(String(255), nullable=True)
+    old_values_json = Column(JSON, nullable=True)
+    new_values_json = Column(JSON, nullable=True)
+    options_json = Column(JSON, nullable=True)
     reason = Column(Text, nullable=False)
     corrected_by = Column(Integer, nullable=True)
     corrected_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -138,6 +154,9 @@ class AttendanceCorrection(Base):
 
 class PayrollPeriod(Base):
     __tablename__ = "payroll_period"
+    __table_args__ = (
+        UniqueConstraint("start_date", "end_date", name="ux_payroll_period_start_end"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
@@ -156,6 +175,10 @@ class PayrollPeriod(Base):
 
 class EmployeePayroll(Base):
     __tablename__ = "employee_payroll"
+    __table_args__ = (
+        UniqueConstraint("employee_id", "payroll_period_id", name="ux_employee_payroll_employee_period"),
+        Index("ix_employee_payroll_employee_period", "employee_id", "payroll_period_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     payroll_period_id = Column(Integer, ForeignKey("payroll_period.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -208,6 +231,9 @@ class PayrollAdjustment(Base):
 
 class PayrollDiscrepancy(Base):
     __tablename__ = "payroll_discrepancy"
+    __table_args__ = (
+        Index("ix_payroll_discrepancy_payroll_status", "employee_payroll_id", "status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     employee_payroll_id = Column(Integer, ForeignKey("employee_payroll.id", ondelete="CASCADE"), nullable=True, index=True)

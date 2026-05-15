@@ -1,7 +1,8 @@
-from app.models.attendence_types import AttendenceTypes
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from app.utility.reference_codes import ATTENDANCE_STATUS_CODES
 
 
-def get_att_types_srv(db:Session):
-    return db.scalars(select(AttendenceTypes)).all()
+def get_att_types_srv(db):
+    return [
+        {"id": index, "code": code, "attendence_type": code}
+        for index, code in enumerate(ATTENDANCE_STATUS_CODES)
+    ]
