@@ -1,6 +1,6 @@
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions.base_exception import BadRequestException, ForbiddenException, ResourceNotFoundException
@@ -46,6 +46,25 @@ def _day_bounds(work_date: date) -> tuple[datetime, datetime]:
         datetime.combine(work_date, time.min).replace(tzinfo=timezone.utc),
         datetime.combine(work_date, time.max).replace(tzinfo=timezone.utc),
     )
+
+
+def _datetime_for_work_time(work_date: date, work_time: time) -> datetime:
+    return datetime.combine(work_date, work_time).replace(tzinfo=timezone.utc)
+
+
+def _scheduled_break_events(work_date: date, schedule) -> list[tuple[str, datetime]]:
+    break_minutes = int(schedule.break_minutes or 0)
+    if break_minutes <= 0:
+        return []
+
+    scheduled_minutes = _minutes_between(schedule.start_time, schedule.end_time)
+    if scheduled_minutes <= break_minutes:
+        return []
+
+    break_start_offset = max(0, (scheduled_minutes - break_minutes) // 2)
+    break_start = _datetime_for_work_time(work_date, schedule.start_time) + timedelta(minutes=break_start_offset)
+    break_end = break_start + timedelta(minutes=break_minutes)
+    return [("break_start", break_start), ("break_end", break_end)]
 
 
 def _get_employee(employee_id: int, db: Session) -> Employees:
@@ -247,13 +266,14 @@ def create_attendance_event(
     return event, day
 
 
-def _apply_corrections(day: AttendanceDay, db: Session):
+def _apply_corrections(day: AttendanceDay, db: Session) -> set[str]:
     corrections = db.scalars(
         select(AttendanceCorrection)
         .where(AttendanceCorrection.attendance_day_id == day.id)
         .order_by(AttendanceCorrection.corrected_at.asc(), AttendanceCorrection.id.asc())
     ).all()
 
+    applied_fields: set[str] = set()
     for correction in corrections:
         if correction.field_changed not in {
             "check_in_time",
@@ -267,8 +287,10 @@ def _apply_corrections(day: AttendanceDay, db: Session):
         if correction.field_changed.endswith("_time"):
             parsed_value = time.fromisoformat(correction.new_value) if correction.new_value else None
         setattr(day, correction.field_changed, parsed_value)
+        applied_fields.add(correction.field_changed)
 
     day.is_manually_corrected = bool(corrections)
+    return applied_fields
 
 
 def calculate_attendance_day(employee_id: int, work_date: date, db: Session, trigger_reason: str = "recalculation") -> AttendanceDay:
@@ -305,7 +327,8 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
     day.break_start_time = event_times.get("break_start").time() if event_times.get("break_start") else None
     day.break_end_time = event_times.get("break_end").time() if event_times.get("break_end") else None
     day.check_out_time = event_times.get("check_out").time() if event_times.get("check_out") else None
-    _apply_corrections(day, db)
+    corrected_fields = _apply_corrections(day, db)
+    manual_status = day.status if "status" in corrected_fields else None
 
     scheduled_minutes = _minutes_between(schedule.start_time, schedule.end_time)
     expected_work_minutes = max(0, scheduled_minutes - int(schedule.break_minutes or 0))
@@ -322,10 +345,11 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
     day.status = "absent"
 
     weekly_off = WEEKDAY_NAMES[work_date.weekday()] in {item.lower() for item in (schedule.weekly_off_days or [])}
-    if not events and weekly_off:
+    has_attendance_time = bool(day.check_in_time or day.break_start_time or day.break_end_time or day.check_out_time)
+    if not has_attendance_time and weekly_off:
         day.status = "weekly_off"
         day.expected_work_minutes = 0
-    elif vacation and not events:
+    elif vacation and not has_attendance_time:
         if vacation.vacation_type == int(VacationTypes.sick):
             day.status = "sick_leave"
             day.normal_paid_minutes = expected_work_minutes if vacation.is_paid else 0
@@ -336,7 +360,7 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         else:
             day.status = "unpaid_vacation"
             day.unpaid_minutes = expected_work_minutes
-    elif not events:
+    elif not has_attendance_time:
         day.status = "absent"
         day.absence_minutes = expected_work_minutes
         day.unpaid_minutes = expected_work_minutes
@@ -360,7 +384,7 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         day.unpaid_minutes = max(0, expected_work_minutes - actual_work_minutes)
         day.overtime_minutes = max(0, actual_work_minutes - expected_work_minutes)
         day.absence_minutes = day.unpaid_minutes
-        day.status = "late" if day.late_minutes > 0 else "present"
+        day.status = "late" if day.late_minutes > 0 or day.early_leave_minutes > 0 or day.unpaid_minutes > 0 else "present"
 
         if weekly_off:
             day.status = "present"
@@ -372,6 +396,9 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
 
         if vacation:
             day.is_manually_corrected = True
+
+    if manual_status:
+        day.status = manual_status
 
     day.calculated_at = _utc_now()
     db.add(day)
@@ -403,8 +430,78 @@ def recalculate_attendance_for_employee(employee_id: int, start_date: date, end_
     return days
 
 
+def mark_all_employees_present(work_date: date, db: Session, created_by: int | None = None) -> dict[str, int]:
+    employee_ids = db.scalars(
+        select(Employees.id).where(Employees.is_active.is_(True)).order_by(Employees.id.asc())
+    ).all()
+
+    if not employee_ids:
+        return {"updated": 0, "created": 0}
+
+    created = 0
+    updated = 0
+    day_start, day_end = _day_bounds(work_date)
+
+    for employee_id in employee_ids:
+        existing_day = db.scalar(
+            select(AttendanceDay).where(
+                AttendanceDay.employee_id == employee_id,
+                AttendanceDay.work_date == work_date,
+            )
+        )
+        if existing_day:
+            updated += 1
+        else:
+            created += 1
+
+        schedule = get_employee_schedule(employee_id, work_date, db)
+        desired_events = [
+            ("check_in", _datetime_for_work_time(work_date, schedule.start_time)),
+            *_scheduled_break_events(work_date, schedule),
+            ("check_out", _datetime_for_work_time(work_date, schedule.end_time)),
+        ]
+        existing_types = set(
+            db.scalars(
+                select(AttendanceEvent.event_type).where(
+                    AttendanceEvent.employee_id == employee_id,
+                    AttendanceEvent.event_time >= day_start,
+                    AttendanceEvent.event_time <= day_end,
+                )
+            ).all()
+        )
+
+        for event_type, event_time in desired_events:
+            if event_type in existing_types:
+                continue
+            db.add(
+                AttendanceEvent(
+                    employee_id=employee_id,
+                    event_type=event_type,
+                    event_time=event_time,
+                    source="admin",
+                    note="Marked present by HR/Admin",
+                    created_by=created_by,
+                )
+            )
+            existing_types.add(event_type)
+
+        day = calculate_attendance_day(employee_id, work_date, db, trigger_reason="mark_all_present")
+        save_audit_log(
+            db,
+            action="attendance_mark_present",
+            entity_type="AttendanceDay",
+            entity_id=day.id,
+            new_data_json={"employee_id": employee_id, "work_date": work_date.isoformat()},
+            user_id=created_by,
+        )
+
+    db.commit()
+    return {"updated": updated, "created": created}
+
+
 def create_attendance_correction(payload, db: Session):
     day = _get_or_create_attendance_day(payload.employee_id, payload.work_date, db)
+    _validate_attendance_correction(day, payload)
     current_value = getattr(day, payload.field_changed, None)
     correction = AttendanceCorrection(
         attendance_day_id=day.id,
@@ -435,6 +532,70 @@ def create_attendance_correction(payload, db: Session):
     return correction, updated_day
 
 
+def _validate_attendance_correction(day: AttendanceDay, payload) -> None:
+    field = payload.field_changed
+    new_time = time.fromisoformat(payload.new_value) if field.endswith("_time") and payload.new_value else None
+
+    if field == "break_start_time" and not day.check_in_time:
+        raise BadRequestException("Set check-in before setting break start")
+    if field == "break_end_time" and not day.break_start_time:
+        raise BadRequestException("Set break start before setting break end")
+    if field == "check_out_time" and not day.check_in_time:
+        raise BadRequestException("Set check-in before setting check-out")
+    if field == "check_out_time" and day.break_start_time and not day.break_end_time:
+        raise BadRequestException("Set break end before setting check-out")
+
+    if not new_time:
+        return
+
+    if field == "check_in_time":
+        if day.break_start_time and new_time >= day.break_start_time:
+            raise BadRequestException("Check-in must be before break start")
+        if day.check_out_time and new_time >= day.check_out_time:
+            raise BadRequestException("Check-in must be before check-out")
+    elif field == "break_start_time":
+        if day.check_in_time and new_time <= day.check_in_time:
+            raise BadRequestException("Break start must be after check-in")
+        if day.break_end_time and new_time >= day.break_end_time:
+            raise BadRequestException("Break start must be before break end")
+        if day.check_out_time and new_time >= day.check_out_time:
+            raise BadRequestException("Break start must be before check-out")
+    elif field == "break_end_time":
+        if day.break_start_time and new_time <= day.break_start_time:
+            raise BadRequestException("Break end must be after break start")
+        if day.check_out_time and new_time >= day.check_out_time:
+            raise BadRequestException("Break end must be before check-out")
+    elif field == "check_out_time" and day.check_in_time and new_time <= day.check_in_time:
+        raise BadRequestException("Check-out must be after check-in")
+
+
+def delete_attendance_day(employee_id: int, work_date: date, db: Session, deleted_by: int | None = None) -> dict[str, int]:
+    day = get_attendance_day(employee_id, work_date, db)
+    if not day:
+        raise ResourceNotFoundException("Attendance day")
+
+    day_start, day_end = _day_bounds(work_date)
+    db.execute(delete(AttendanceCorrection).where(AttendanceCorrection.attendance_day_id == day.id))
+    db.execute(
+        delete(AttendanceEvent).where(
+            AttendanceEvent.employee_id == employee_id,
+            AttendanceEvent.event_time >= day_start,
+            AttendanceEvent.event_time <= day_end,
+        )
+    )
+    save_audit_log(
+        db,
+        action="attendance_delete_day",
+        entity_type="AttendanceDay",
+        entity_id=day.id,
+        old_data_json={"employee_id": employee_id, "work_date": work_date.isoformat(), "status": day.status},
+        user_id=deleted_by,
+    )
+    db.delete(day)
+    db.commit()
+    return {"deleted": 1}
+
+
 def get_attendance_day(employee_id: int, work_date: date, db: Session) -> AttendanceDay | None:
     return db.scalar(
         select(AttendanceDay)
@@ -456,6 +617,15 @@ def get_attendance_days(employee_id: int, start_date: date, end_date: date, db: 
             AttendanceDay.work_date <= end_date,
         )
         .order_by(AttendanceDay.work_date.asc())
+    ).all()
+
+
+def get_attendance_days_by_date(work_date: date, db: Session) -> list[AttendanceDay]:
+    return db.scalars(
+        select(AttendanceDay)
+        .options(selectinload(AttendanceDay.events))
+        .where(AttendanceDay.work_date == work_date)
+        .order_by(AttendanceDay.employee_id.asc())
     ).all()
 
 

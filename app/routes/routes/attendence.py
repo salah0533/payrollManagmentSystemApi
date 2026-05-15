@@ -4,17 +4,20 @@ from fastapi import APIRouter, Depends
 from app.core.responses import api_success
 from app.models.types.attendenceTypes import AttendanceType
 from app.schemas.attendenceBaseModel import AttendenceBaseModel,DataRange
-from app.schemas.attendance_payroll import AttendanceActionRequest, AttendanceCorrectionRequest
+from app.schemas.attendance_payroll import AttendanceActionRequest, AttendanceCorrectionRequest, AttendanceDayRead
 from app.dependencies.auth import require_permissions, require_self_or_permission
 from app.models.auth import User
 from app.services.attendance_calculation_service import (
         create_attendance_correction,
         create_attendance_event,
+        delete_attendance_day,
         get_attendance_day,
         get_attendance_days,
+        get_attendance_days_by_date,
+        mark_all_employees_present,
         recalculate_attendance_for_employee,
 )
-from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence, get_attendence_by_date,update_attendence,get_employee_attendence_by_date,get_employee_attendence,get_employees_attendence,delete_attendence,mark_all_emp_present
+from app.services.attendence_service import add_new_attendence,get_attendance_type,get_attendence, get_attendence_by_date,update_attendence,get_employee_attendence_by_date,get_employee_attendence,get_employees_attendence,delete_attendence
 from datetime import date as Date
 from sqlalchemy.orm import Session
 from app.db.session import get_db
@@ -30,6 +33,16 @@ def get_emps_att(
 ):
         res = get_employees_attendence(date,db)
         return api_success(res)
+
+
+@router.get("/days/{work_date}")
+def get_attendance_days_for_date(
+        work_date: Date,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(require_permissions("attendance.read_all")),
+):
+        days = get_attendance_days_by_date(work_date, db)
+        return api_success([AttendanceDayRead.model_validate(day) for day in days])
 
 @router.get("/emp/{id}")
 def get_emp_att(
@@ -88,10 +101,11 @@ def add_attendence(
 
 @router.put("/mark_all_present")
 def mark_all_present(
+        work_date: Date | None = None,
         db:Session=Depends(get_db),
         current_user: User = Depends(require_permissions("attendance.correct")),
 ):
-        data = mark_all_emp_present(db)
+        data = mark_all_employees_present(work_date or Date.today(), db, created_by=current_user.id)
         return api_success(data)
         
 @router.delete("/{att_id}")
@@ -102,6 +116,17 @@ def delete_att(
 ):
         delete_attendence(att_id,db)
         return api_success()
+
+
+@router.delete("/day/{employee_id}/{work_date}")
+def delete_attendance_day_view(
+        employee_id: int,
+        work_date: Date,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(require_permissions("attendance.correct")),
+):
+        result = delete_attendance_day(employee_id, work_date, db, deleted_by=current_user.id)
+        return api_success(result)
 
 
 @router.post("/check-in")
