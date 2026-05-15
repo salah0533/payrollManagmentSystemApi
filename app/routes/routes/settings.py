@@ -7,7 +7,7 @@ from app.services.policy_service import (
     update_default_work_schedule,
     update_payroll_policy,
 )
-from app.dependencies.auth import require_permissions
+from app.dependencies.auth import require_authenticated_user, require_permissions
 from app.models.auth import User
 from app.schemas.attendance_payroll import PayrollPolicyPayload, WorkSchedulePayload
 from app.schemas.settingBaseModel import SettingsBaseModel
@@ -67,6 +67,16 @@ def get_payroll_policy(
 ):
     policy = get_or_create_payroll_policy(db)
     return api_success(policy)
+
+
+@router.get("/payroll-currency")
+def get_payroll_currency(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_authenticated_user),
+):
+    policy = get_or_create_payroll_policy(db)
+    currency = policy.default_currency if policy.default_currency != "ILS" else "USD"
+    return api_success({"default_currency": currency})
 
 
 @router.put("/payroll-policy")

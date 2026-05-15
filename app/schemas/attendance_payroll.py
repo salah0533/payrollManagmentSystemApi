@@ -140,6 +140,16 @@ class PayrollPolicyPayload(BaseModel):
     lock_payroll_after_payment: bool = True
     holidays_json: list[str] = Field(default_factory=list)
 
+    @field_validator("default_currency")
+    @classmethod
+    def validate_default_currency(cls, value: str) -> str:
+        normalized = value.upper().strip()
+        if normalized == "ILS":
+            raise ValueError("default_currency is not allowed")
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise ValueError("default_currency must be a 3-letter ISO currency code")
+        return normalized
+
 
 class PayrollPolicyRead(PayrollPolicyPayload):
     id: int
