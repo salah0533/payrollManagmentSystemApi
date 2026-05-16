@@ -2,7 +2,7 @@ import calendar
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions.base_exception import BadRequestException, ResourceNotFoundException
@@ -782,6 +782,117 @@ def sync_payroll_with_attendance_context(employee_id: int, work_date: date, db: 
         "payroll_id": payroll.id,
         "payroll_status": payroll.status,
         "payroll_period_id": period.id,
+    }
+
+
+def _has_payroll_payments(employee_payroll_id: int, db: Session) -> bool:
+    return db.scalar(
+        select(Payments.id)
+        .where(Payments.employee_payroll_id == employee_payroll_id)
+        .limit(1)
+    ) is not None
+
+
+def _has_payroll_adjustments(employee_payroll_id: int, db: Session) -> bool:
+    return db.scalar(
+        select(PayrollAdjustment.id)
+        .where(PayrollAdjustment.employee_payroll_id == employee_payroll_id)
+        .limit(1)
+    ) is not None
+
+
+def _delete_auto_payroll(payroll: EmployeePayroll, db: Session) -> None:
+    db.execute(
+        delete(PayrollCalculationHistory)
+        .where(PayrollCalculationHistory.employee_payroll_id == payroll.id)
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(
+        delete(PayrollDiscrepancy)
+        .where(PayrollDiscrepancy.employee_payroll_id == payroll.id)
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(
+        delete(EmployeePayroll)
+        .where(EmployeePayroll.id == payroll.id)
+        .execution_options(synchronize_session=False)
+    )
+    db.flush()
+
+
+def sync_payroll_after_attendance_delete(employee_id: int, work_date: date, db: Session, deleted_by: int | None = None) -> dict[str, object]:
+    period = get_or_create_payroll_period_for_date(work_date, db)
+    payroll = _get_employee_payroll(employee_id, period.id, db)
+
+    if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
+        _upsert_discrepancy(
+            payroll=payroll,
+            period=period,
+            employee_id=employee_id,
+            discrepancy_type="attendance_changed_after_approval",
+            description=f"Attendance deleted on {work_date.isoformat()} after payroll was finalized",
+            severity="high",
+            db=db,
+        )
+        return {
+            "status": "discrepancy_created",
+            "payroll_id": payroll.id,
+            "payroll_status": payroll.status,
+            "payroll_period_id": period.id,
+        }
+
+    remaining_days = _load_period_attendance(employee_id, period, db)
+    if (
+        not remaining_days
+        and not _has_payroll_adjustments(payroll.id, db)
+        and not _has_payroll_payments(payroll.id, db)
+    ):
+        payroll_id = payroll.id
+        _delete_auto_payroll(payroll, db)
+        save_audit_log(
+            db,
+            action="employee_payroll_deleted_after_attendance_delete",
+            entity_type="EmployeePayroll",
+            entity_id=payroll_id,
+            old_data_json={
+                "employee_id": employee_id,
+                "payroll_period_id": period.id,
+                "work_date": work_date.isoformat(),
+            },
+            user_id=deleted_by,
+        )
+        return {
+            "status": "deleted_empty_payroll",
+            "payroll_id": payroll_id,
+            "payroll_period_id": period.id,
+            "remaining_attendance_days": 0,
+        }
+
+    policy = get_or_create_payroll_policy(db)
+    if not policy.auto_recalculate_draft_payroll:
+        detect_payroll_discrepancies(employee_id, period.id, db)
+        return {
+            "status": "skipped",
+            "payroll_id": payroll.id,
+            "payroll_status": payroll.status,
+            "payroll_period_id": period.id,
+            "remaining_attendance_days": len(remaining_days),
+        }
+
+    payroll = calculate_employee_payroll(
+        employee_id=employee_id,
+        payroll_period_id=period.id,
+        db=db,
+        reason="attendance_delete",
+        created_by=deleted_by,
+        force_history=True,
+    )
+    return {
+        "status": "recalculated",
+        "payroll_id": payroll.id,
+        "payroll_status": payroll.status,
+        "payroll_period_id": period.id,
+        "remaining_attendance_days": len(remaining_days),
     }
 
 

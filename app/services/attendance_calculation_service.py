@@ -883,9 +883,9 @@ def delete_attendance_day(employee_id: int, work_date: date, db: Session, delete
     )
     db.delete(day)
     db.flush()
-    from app.services.payroll_calculation_service import sync_payroll_with_attendance_context
+    from app.services.payroll_calculation_service import sync_payroll_after_attendance_delete
 
-    payroll_sync = sync_payroll_with_attendance_context(employee_id, work_date, db, trigger_reason="attendance_delete")
+    payroll_sync = sync_payroll_after_attendance_delete(employee_id, work_date, db, deleted_by=deleted_by)
     db.commit()
     return {"deleted": 1, "payroll_sync_status": payroll_sync.get("status")}
 

@@ -12,7 +12,7 @@ from app.models.attendance_payroll import AttendanceDay, EmployeePayroll, Payrol
 from app.models.employees import Employees
 from app.models.payment_types import PaymentTypes
 from app.models.salary_type import SalaryType
-from app.services.attendance_calculation_service import apply_smart_attendance_status_correction, create_attendance_event
+from app.services.attendance_calculation_service import apply_smart_attendance_status_correction, create_attendance_event, delete_attendance_day
 from app.services.payroll_calculation_service import approve_employee_payroll, get_employee_payroll_by_period, get_or_create_payroll_period_for_date
 
 
@@ -230,6 +230,71 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         ).all()
         self.assertFalse(any(item.discrepancy_type == "missing_checkout" for item in open_after))
         self.assertFalse(any(item.discrepancy_type == "attendance_requires_review" for item in open_after))
+
+    def test_deleting_only_attendance_day_deletes_empty_auto_payroll(self):
+        work_date = date(2026, 5, 12)
+        apply_smart_attendance_status_correction(
+            self.employee.id,
+            work_date,
+            "present",
+            corrected_by=1,
+            reason="Seed attendance",
+            options={},
+            db=self.db,
+        )
+        period = get_or_create_payroll_period_for_date(work_date, self.db)
+        payroll = get_employee_payroll_by_period(self.employee.id, period.id, self.db)
+        payroll_id = payroll.id
+
+        result = delete_attendance_day(self.employee.id, work_date, self.db, deleted_by=1)
+
+        deleted_day = self.db.scalar(
+            select(AttendanceDay).where(
+                AttendanceDay.employee_id == self.employee.id,
+                AttendanceDay.work_date == work_date,
+            )
+        )
+        deleted_payroll = self.db.get(EmployeePayroll, payroll_id)
+
+        self.assertEqual(result["payroll_sync_status"], "deleted_empty_payroll")
+        self.assertIsNone(deleted_day)
+        self.assertIsNone(deleted_payroll)
+
+    def test_deleting_attendance_day_recalculates_existing_period_payroll(self):
+        deleted_date = date(2026, 5, 12)
+        remaining_date = date(2026, 5, 13)
+        for work_date in (deleted_date, remaining_date):
+            apply_smart_attendance_status_correction(
+                self.employee.id,
+                work_date,
+                "present",
+                corrected_by=1,
+                reason="Seed attendance",
+                options={},
+                db=self.db,
+            )
+        period = get_or_create_payroll_period_for_date(deleted_date, self.db)
+        payroll = get_employee_payroll_by_period(self.employee.id, period.id, self.db)
+
+        result = delete_attendance_day(self.employee.id, deleted_date, self.db, deleted_by=1)
+        payroll_after = self.db.get(EmployeePayroll, payroll.id)
+        open_discrepancies = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.status == "open",
+            )
+        ).all()
+
+        self.assertEqual(result["payroll_sync_status"], "recalculated")
+        self.assertIsNotNone(payroll_after)
+        self.assertEqual(payroll_after.status, "needs_review")
+        self.assertTrue(
+            any(
+                item.discrepancy_type == "missing_attendance"
+                and deleted_date.isoformat() in item.description
+                for item in open_discrepancies
+            )
+        )
 
     def test_duplicate_attendance_day_is_rejected(self):
         self.db.add(
