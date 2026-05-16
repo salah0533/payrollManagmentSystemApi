@@ -3,7 +3,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil import tz
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.exceptions.base_exception import ResourceNotFoundException
@@ -40,6 +40,21 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _ensure_payroll_policy_schema(db: Session) -> None:
+    inspector = inspect(db.bind)
+    if not inspector.has_table("payroll_policy"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("payroll_policy")}
+    if "minimum_auto_pay_minutes" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN minimum_auto_pay_minutes INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+
+
 def get_schedule_timezone(schedule: WorkSchedule) -> tzinfo:
     timezone_name = (schedule.timezone or "UTC").strip() or "UTC"
     if timezone_name.upper() == "UTC":
@@ -52,6 +67,7 @@ def get_schedule_timezone(schedule: WorkSchedule) -> tzinfo:
 
 
 def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
+    _ensure_payroll_policy_schema(db)
     policy = db.scalar(select(PayrollPolicy).order_by(PayrollPolicy.id))
     if policy:
         return policy
