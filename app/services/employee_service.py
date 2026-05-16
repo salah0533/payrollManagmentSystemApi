@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -12,6 +13,7 @@ from app.models.employee_reference import Department, Position
 from app.models.employees import Employees
 from app.schemas.user import EmployeeCreateRequest, EmployeeRead, EmployeeUpdateRequest, UserCreateRequest
 from app.services.audit_service import save_audit_log, serialize_model
+from app.services.policy_service import get_default_work_schedule, get_or_create_payroll_policy
 from app.services.user_service import ResourceConflictException, get_resource_or_404
 from app.services.user_service import create_user, serialize_employee
 
@@ -52,6 +54,25 @@ def _get_position_or_404(position_id: int, db: Session) -> Position:
         resource_name="Position",
         identifier=position_id,
     )
+
+
+def _legacy_attendance_defaults(db: Session) -> dict[str, Decimal | int]:
+    schedule = get_default_work_schedule(db)
+    policy = get_or_create_payroll_policy(db)
+    scheduled_minutes = max(
+        0,
+        (
+            (schedule.end_time.hour * 60 + schedule.end_time.minute)
+            - (schedule.start_time.hour * 60 + schedule.start_time.minute)
+            - int(schedule.break_minutes or 0)
+        ),
+    )
+    daily_work_hours = max(1, scheduled_minutes // 60) if scheduled_minutes else 8
+    return {
+        "daily_work_hours": daily_work_hours,
+        "allowed_late": Decimal(str(max(0, int(policy.allowed_late_minutes or 0)))),
+        "min_extraTime": Decimal(str(max(0, int(policy.minimum_overtime_minutes or 0)))),
+    }
 
 
 def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | EmployeeUpdateRequest, db: Session) -> None:
@@ -110,10 +131,7 @@ def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | 
         "day_price",
         "hour_price",
         "extra_hours_price",
-        "daily_work_hours",
         "vacation_days",
-        "allowed_late",
-        "min_extraTime",
     )
     for field_name in numeric_fields:
         if field_name in data and data[field_name] is not None:
@@ -121,6 +139,7 @@ def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | 
 
 
 def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | None = None) -> EmployeeRead:
+    legacy_defaults = _legacy_attendance_defaults(db)
     employee = Employees(
         first_name=payload.first_name,
         last_name=payload.last_name,
@@ -140,10 +159,10 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
         hour_price=payload.hour_price,
         extra_hours_price=payload.extra_hours_price,
         vacation_days=payload.vacation_days,
-        daily_work_hours=payload.daily_work_hours,
+        daily_work_hours=int(legacy_defaults["daily_work_hours"]),
         is_active=payload.status.value == "active",
-        allowed_late=payload.allowed_late,
-        min_extraTime=payload.min_extraTime,
+        allowed_late=legacy_defaults["allowed_late"],
+        min_extraTime=legacy_defaults["min_extraTime"],
         joined=payload.hire_date or payload.joined or date.today(),
     )
     _sync_employee_fields(employee, payload, db)

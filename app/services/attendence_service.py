@@ -4,6 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.models.employees import Employees
 from app.models.attendence import Attendence
 from app.models.vacation import Vacation
+from app.services.policy_service import get_employee_schedule, get_or_create_payroll_policy
 from app.services.settings import get_settings
 from app.schemas.attendenceBaseModel import AttendenceBaseModel
 from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
@@ -61,12 +62,21 @@ def get_attendance_type(
         exit_dt = datetime.combine(today, exit_time)
 
         worked_time = exit_dt - entry_dt
-        expected_work  = timedelta(hours=float(emp.daily_work_hours))
+        schedule = get_employee_schedule(emp_id, att_date, db)
+        policy = get_or_create_payroll_policy(db)
+        scheduled_minutes = max(
+            0,
+            int((datetime.combine(today, schedule.end_time) - datetime.combine(today, schedule.start_time)).total_seconds() // 60)
+            - int(schedule.break_minutes or 0),
+        )
+        expected_work  = timedelta(minutes=scheduled_minutes)
+        minimum_overtime = timedelta(minutes=max(0, int(policy.minimum_overtime_minutes or 0)))
+        allowed_late = timedelta(minutes=max(0, int(policy.allowed_late_minutes or 0)))
         
-        if worked_time > expected_work + timedelta(minutes=float(emp.min_extraTime)):
+        if worked_time > expected_work + minimum_overtime:
             return AttendanceType.OVERTIME  # OVERTIME
 
-        if worked_time < expected_work - timedelta(minutes=float(emp.allowed_late)):
+        if worked_time < expected_work - allowed_late:
             return AttendanceType.LATE  # LATE
 
     return AttendanceType.Presnt  # Presnt

@@ -115,15 +115,12 @@ class EmployeeBasePayload(BaseModel):
     status: EmployeeStatus = EmployeeStatus.active
     hire_date: Optional[date] = None
     dues: Decimal = Decimal("0.00")
-    daily_work_hours: int = Field(8, alias="daly_work_hours")
     extra_hours_price: Decimal = Decimal("0.00")
     vacation_days: int = 0
     hour_price: Decimal = Decimal("0.00")
     day_price: Decimal = Decimal("0.00")
     monthly_price: Decimal = Field(Decimal("0.00"), alias="month_price")
     salary_type: int = 0
-    allowed_late: Decimal = Decimal("0.00")
-    min_extraTime: Decimal = Decimal("0.00")
     joined: Optional[date] = None
 
     @model_validator(mode="after")
@@ -163,15 +160,12 @@ class EmployeeUpdateRequest(BaseModel):
     status: Optional[EmployeeStatus] = None
     hire_date: Optional[date] = None
     dues: Optional[Decimal] = None
-    daily_work_hours: Optional[int] = Field(None, alias="daly_work_hours")
     extra_hours_price: Optional[Decimal] = None
     vacation_days: Optional[int] = None
     hour_price: Optional[Decimal] = None
     day_price: Optional[Decimal] = None
     monthly_price: Optional[Decimal] = Field(None, alias="month_price")
     salary_type: Optional[int] = None
-    allowed_late: Optional[Decimal] = None
-    min_extraTime: Optional[Decimal] = None
     joined: Optional[date] = None
 
 
@@ -194,9 +188,6 @@ class EmployeeRead(BaseModel):
     hour_price: Decimal
     extra_hours_price: Decimal
     vacation_days: int
-    daily_work_hours: int
-    allowed_late: Decimal
-    min_extraTime: Decimal
     is_active: bool
     created_at: datetime
     updated_at: datetime
