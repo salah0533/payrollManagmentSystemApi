@@ -104,8 +104,8 @@ class AttendanceDay(Base):
 
     employee = relationship("Employees")
     work_schedule = relationship("WorkSchedule")
-    events = relationship("AttendanceEvent", back_populates="attendance_day")
-    corrections = relationship("AttendanceCorrection", back_populates="attendance_day")
+    events = relationship("AttendanceEvent", back_populates="attendance_day", passive_deletes="all")
+    corrections = relationship("AttendanceCorrection", back_populates="attendance_day", passive_deletes="all")
 
 
 class AttendanceEvent(Base):

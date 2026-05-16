@@ -848,19 +848,30 @@ def _validate_attendance_correction(day: AttendanceDay, payload) -> None:
 
 
 def delete_attendance_day(employee_id: int, work_date: date, db: Session, deleted_by: int | None = None) -> dict[str, int]:
-    day = get_attendance_day(employee_id, work_date, db)
+    day = db.scalar(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id == employee_id,
+            AttendanceDay.work_date == work_date,
+        )
+    )
     if not day:
         raise ResourceNotFoundException("Attendance day")
 
     schedule = get_employee_schedule(employee_id, work_date, db)
     day_start, day_end = _day_bounds(work_date, get_schedule_timezone(schedule))
-    db.execute(delete(AttendanceCorrection).where(AttendanceCorrection.attendance_day_id == day.id))
     db.execute(
-        delete(AttendanceEvent).where(
+        delete(AttendanceCorrection)
+        .where(AttendanceCorrection.attendance_day_id == day.id)
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(
+        delete(AttendanceEvent)
+        .where(
             AttendanceEvent.employee_id == employee_id,
             AttendanceEvent.event_time >= day_start,
             AttendanceEvent.event_time <= day_end,
         )
+        .execution_options(synchronize_session=False)
     )
     save_audit_log(
         db,
