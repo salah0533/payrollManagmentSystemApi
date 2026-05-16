@@ -126,6 +126,9 @@ def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_
     auto_hourly_rate = _divide_decimal(base_monthly_salary * Decimal("60"), Decimal(period_expected_minutes)) if period_expected_minutes else Decimal("0.00")
     auto_minute_rate = _divide_decimal(base_monthly_salary, Decimal(period_expected_minutes)) if period_expected_minutes else Decimal("0.00")
 
+    configured_overtime_rate = _decimal_or_none(getattr(compensation, "overtime_rate", None))
+    if configured_overtime_rate is not None and configured_overtime_rate <= Decimal("0.00"):
+        configured_overtime_rate = None
     daily_override = _decimal_or_none(getattr(compensation, "daily_rate_override", None))
     hourly_override = _decimal_or_none(getattr(compensation, "hourly_rate_override", None))
     overtime_override = _decimal_or_none(getattr(compensation, "overtime_rate_override", None))
@@ -144,14 +147,22 @@ def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_
         minute_rate_source = "auto"
 
     resolved_late_deduction_rate = late_override if late_override is not None else auto_minute_rate
-    resolved_overtime_rate = overtime_override if overtime_override is not None else auto_hourly_rate
+    if overtime_override is not None:
+        resolved_overtime_rate = overtime_override
+        overtime_rate_source = "override"
+    elif configured_overtime_rate is not None:
+        resolved_overtime_rate = configured_overtime_rate
+        overtime_rate_source = "configured"
+    else:
+        resolved_overtime_rate = auto_hourly_rate
+        overtime_rate_source = "auto"
 
     rate_sources = {
         "daily_rate": "override" if daily_override is not None else "auto",
         "hourly_rate": "override" if hourly_override is not None else "auto",
         "minute_rate": minute_rate_source,
         "late_deduction_rate": "override" if late_override is not None else "auto",
-        "overtime_rate": "override" if overtime_override is not None else "auto",
+        "overtime_rate": overtime_rate_source,
     }
 
     review_warnings: list[str] = []

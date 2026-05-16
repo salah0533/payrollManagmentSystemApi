@@ -173,6 +173,13 @@ def get_employee_compensation(employee_id: int, target_date: date, db: Session) 
         ).order_by(EmployeeCompensation.effective_from.desc(), EmployeeCompensation.id.desc())
     )
     if compensation:
+        if compensation.salary_type == "monthly" and _decimal(compensation.overtime_rate) <= Decimal("0.00"):
+            employee = db.get(Employees, employee_id)
+            configured_overtime_rate = _decimal(employee.extra_hours_price) if employee else Decimal("0.00")
+            if configured_overtime_rate > Decimal("0.00"):
+                compensation.overtime_rate = configured_overtime_rate
+                db.add(compensation)
+                db.flush()
         return compensation
 
     employee = db.get(Employees, employee_id)
@@ -199,7 +206,7 @@ def get_employee_compensation(employee_id: int, target_date: date, db: Session) 
         compensation_kwargs.update(
             daily_rate=Decimal("0.00"),
             hourly_rate=Decimal("0.00"),
-            overtime_rate=Decimal("0.00"),
+            overtime_rate=_decimal(employee.extra_hours_price),
             late_deduction_rate=Decimal("0.00"),
         )
     else:

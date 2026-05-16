@@ -476,7 +476,65 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
 
         results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
 
-        self.assertAlmostEqual(Decimal(results["calculation_data_json"]["resolved_hourly_rate"]), Decimal("505.9523809523809523809523810"))
+        self.assertEqual(Decimal(results["calculation_data_json"]["resolved_overtime_rate"]), Decimal("2600.00"))
+        self.assertEqual(results["overtime_amount"], Decimal("5200.00"))
+        self.assertEqual(results["calculation_data_json"]["rate_sources"]["overtime_rate"], "configured")
+
+    def test_monthly_compensation_repairs_legacy_zero_overtime_rate_from_employee_price(self):
+        period = self._payroll_period_for_month(2026, 5)
+        self.db.add(
+            EmployeeCompensation(
+                employee_id=self.employee.id,
+                salary_type="monthly",
+                base_monthly_salary=Decimal("85000.00"),
+                daily_rate=Decimal("0.00"),
+                hourly_rate=Decimal("0.00"),
+                overtime_rate=Decimal("0.00"),
+                late_deduction_rate=Decimal("0.00"),
+                daily_rate_override=None,
+                hourly_rate_override=None,
+                overtime_rate_override=None,
+                late_deduction_rate_override=None,
+                currency="DZD",
+                effective_from=date(2026, 1, 1),
+                is_active=True,
+            )
+        )
+        self.db.commit()
+
+        compensation = get_employee_compensation(self.employee.id, period.end_date, self.db)
+
+        self.assertEqual(compensation.overtime_rate, Decimal("2600.00"))
+
+    def test_monthly_overtime_falls_back_to_auto_hourly_rate_when_no_configured_rate_exists(self):
+        period = self._payroll_period_for_month(2026, 5)
+        self.employee.extra_hours_price = Decimal("0.00")
+        self.db.add(self.employee)
+        self.db.add(
+            EmployeeCompensation(
+                employee_id=self.employee.id,
+                salary_type="monthly",
+                base_monthly_salary=Decimal("85000.00"),
+                daily_rate=Decimal("0.00"),
+                hourly_rate=Decimal("0.00"),
+                overtime_rate=Decimal("0.00"),
+                late_deduction_rate=Decimal("0.00"),
+                daily_rate_override=None,
+                hourly_rate_override=None,
+                overtime_rate_override=None,
+                late_deduction_rate_override=None,
+                currency="DZD",
+                effective_from=date(2026, 1, 1),
+                is_active=True,
+            )
+        )
+        self.db.commit()
+        payroll = self._payroll_stub(period)
+        days = self._month_days(overtime_minutes_by_date={date(2026, 5, 4): 120})
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertAlmostEqual(Decimal(results["calculation_data_json"]["resolved_overtime_rate"]), Decimal("505.9523809523809523809523810"))
         self.assertEqual(results["overtime_amount"], Decimal("1011.90"))
         self.assertEqual(results["calculation_data_json"]["rate_sources"]["overtime_rate"], "auto")
 
