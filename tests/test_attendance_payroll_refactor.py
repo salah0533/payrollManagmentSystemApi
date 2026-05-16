@@ -25,6 +25,7 @@ from app.services.payroll_calculation_service import (
     approve_employee_payroll,
     calculate_employee_payroll,
     calculate_monthly_employee_payroll,
+    create_payroll_history_snapshot,
     get_employee_payroll_by_period,
     get_or_create_payroll_period_for_date,
 )
@@ -446,6 +447,10 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
     def test_monthly_payroll_does_not_double_deduct_partial_late_day(self):
         period = self._payroll_period_for_month(2026, 5)
         payroll = self._payroll_stub(period)
+        policy = self._policy()
+        policy.late_deduction_enabled = True
+        self.db.add(policy)
+        self.db.flush()
         days = self._month_days(absent_dates={date(2026, 5, 3)})
         for day in days:
             if day.work_date == date(2026, 5, 4):
@@ -460,6 +465,7 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(results["calculation_data_json"]["unpaid_minutes"], 540)
         self.assertEqual(results["calculation_data_json"]["partial_unpaid_minutes"], 60)
         self.assertEqual(results["attendance_deduction_amount"], Decimal("4553.57"))
+        self.assertEqual(results["calculation_data_json"]["late_penalty_eligible_minutes"], 0)
         self.assertEqual(results["late_deduction_amount"], Decimal("0.00"))
         self.assertEqual(results["net_salary"], Decimal("80446.43"))
 
@@ -545,7 +551,10 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
 
         self.assertEqual(results["calculation_data_json"]["paid_minutes"], 1)
+        self.assertEqual(results["calculation_data_json"]["earned_paid_minutes"], 1)
+        self.assertEqual(results["calculation_data_json"]["held_for_review_amount"], "0.00")
         self.assertEqual(results["net_salary"], Decimal("8.43"))
+        self.assertEqual(results["total_amount"], Decimal("8.43"))
         self.assertFalse(results["needs_review"])
 
     def test_monthly_tiny_attendance_is_held_for_review_when_minimum_policy_is_enabled(self):
@@ -577,10 +586,107 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
 
         self.assertEqual(results["calculation_data_json"]["attendance_review_held_minutes"], 1)
+        self.assertEqual(results["calculation_data_json"]["earned_paid_minutes"], 1)
         self.assertEqual(results["calculation_data_json"]["paid_minutes"], 0)
-        self.assertEqual(results["net_salary"], Decimal("0.00"))
+        self.assertEqual(results["calculation_data_json"]["earned_net_salary"], "8.43")
+        self.assertEqual(results["calculation_data_json"]["held_for_review_amount"], "8.43")
+        self.assertEqual(results["net_salary"], Decimal("8.43"))
+        self.assertEqual(results["total_amount"], Decimal("0.00"))
         self.assertTrue(results["needs_review"])
         self.assertEqual(days[0].review_status, "needs_review")
+
+    def test_monthly_tiny_attendance_keeps_one_minute_earned_when_late_penalty_enabled(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        policy = self._policy()
+        policy.late_deduction_enabled = True
+        self.db.add(policy)
+        self.db.flush()
+        work_date = self._working_days_for_period(period)[0]
+        days = [
+            AttendanceDay(
+                employee_id=self.employee.id,
+                work_date=work_date,
+                expected_work_minutes=480,
+                actual_work_minutes=1,
+                normal_paid_minutes=1,
+                late_minutes=239,
+                early_leave_minutes=300,
+                late_makeup_minutes=0,
+                overtime_minutes=0,
+                absence_minutes=0,
+                unpaid_minutes=479,
+                status="late",
+                review_status="approved",
+            )
+        ]
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertEqual(results["calculation_data_json"]["late_penalty_eligible_minutes"], 0)
+        self.assertEqual(results["late_deduction_amount"], Decimal("0.00"))
+        self.assertEqual(results["net_salary"], Decimal("8.43"))
+        self.assertEqual(results["total_amount"], Decimal("8.43"))
+
+    def test_approving_tiny_monthly_attendance_releases_payable_amount(self):
+        period = self._payroll_period_for_month(2026, 5)
+        policy = self._policy()
+        policy.minimum_auto_pay_minutes = 5
+        self.db.add(policy)
+        self.db.flush()
+        work_date = self._working_days_for_period(period)[0]
+        day = AttendanceDay(
+            employee_id=self.employee.id,
+            work_date=work_date,
+            expected_work_minutes=480,
+            actual_work_minutes=1,
+            normal_paid_minutes=1,
+            late_minutes=0,
+            early_leave_minutes=0,
+            late_makeup_minutes=0,
+            overtime_minutes=0,
+            absence_minutes=0,
+            unpaid_minutes=479,
+            status="present",
+            review_status="draft",
+        )
+        payroll = EmployeePayroll(
+            payroll_period_id=period.id,
+            employee_id=self.employee.id,
+            salary_type="monthly",
+            status="draft",
+        )
+        results = calculate_monthly_employee_payroll(payroll, period, [day], self.db)
+        for field_name, value in results.items():
+            if field_name in {"calculation_data_json", "needs_review"}:
+                continue
+            setattr(payroll, field_name, value)
+        payroll.status = "needs_review"
+        payroll.total_amount = Decimal("0.00")
+        payroll.balance_amount = Decimal("0.00")
+        self.db.add(payroll)
+        self.db.flush()
+        create_payroll_history_snapshot(
+            payroll,
+            old_gross_salary=Decimal("0.00"),
+            old_net_salary=Decimal("0.00"),
+            reason="seed_needs_review_tiny_attendance",
+            calculation_data_json=results["calculation_data_json"],
+            db=self.db,
+            created_by=1,
+        )
+        self.db.commit()
+
+        self.assertEqual(Decimal(str(payroll.net_salary)), Decimal("8.43"))
+        self.assertEqual(Decimal(str(payroll.total_amount)), Decimal("0.00"))
+        self.assertEqual(payroll.status, "needs_review")
+
+        approved = approve_employee_payroll(payroll.id, self.db, approved_by=1)
+
+        self.assertEqual(Decimal(str(approved.net_salary)), Decimal("8.43"))
+        self.assertEqual(Decimal(str(approved.total_amount)), Decimal("8.43"))
+        self.assertEqual(Decimal(str(approved.balance_amount)), Decimal("8.43"))
+        self.assertEqual(approved.status, "approved")
 
 
 if __name__ == "__main__":

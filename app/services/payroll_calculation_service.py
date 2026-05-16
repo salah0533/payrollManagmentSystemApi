@@ -87,6 +87,28 @@ def _requires_minimum_attendance_review(day: AttendanceDay, minimum_auto_pay_min
     return 0 < _int(day.actual_work_minutes) < minimum_auto_pay_minutes
 
 
+def _build_payroll_amount_snapshot(
+    *,
+    earned_net_salary: Decimal,
+    payable_amount: Decimal | None = None,
+    held_for_review_amount: Decimal | None = None,
+) -> dict[str, Decimal]:
+    earned = _money(earned_net_salary)
+    payable = _money(payable_amount if payable_amount is not None else earned)
+    approved_payable = earned
+    held = _money(
+        held_for_review_amount if held_for_review_amount is not None else max(Decimal("0.00"), approved_payable - payable)
+    )
+    if held > approved_payable:
+        held = approved_payable
+    return {
+        "earned_net_salary": earned,
+        "payable_amount": payable,
+        "approved_payable_amount": approved_payable,
+        "held_for_review_amount": held,
+    }
+
+
 def _apply_payroll_snapshot_fields(payroll: EmployeePayroll, calculation_data_json: dict | None) -> EmployeePayroll:
     snapshot = calculation_data_json or {}
     payroll.calculation_data_json = snapshot
@@ -164,8 +186,10 @@ def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_
     }
 
 
-def _sync_payroll_balance(payroll: EmployeePayroll) -> None:
-    payroll.total_amount = _money(_decimal(payroll.net_salary))
+def _sync_payroll_balance(payroll: EmployeePayroll, payable_amount: Decimal | None = None) -> None:
+    if payable_amount is None:
+        payable_amount = _decimal(payroll.total_amount, default=str(_decimal(payroll.net_salary)))
+    payroll.total_amount = _money(_decimal(payable_amount))
     payroll.paid_amount = _money(_decimal(payroll.paid_amount))
     payroll.balance_amount = _money(payroll.total_amount - payroll.paid_amount)
 
@@ -395,17 +419,25 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     )
     review_held_paid_minutes = sum(_int(day.normal_paid_minutes) for day in tiny_review_days)
     period_expected_minutes = _int(resolved_rates["period_expected_minutes"])
-    raw_unpaid_minutes = _int(summary["unpaid_minutes"]) + missing_workday_minutes + review_held_paid_minutes
+    earned_unpaid_minutes = min(period_expected_minutes, max(0, _int(summary["unpaid_minutes"]) + missing_workday_minutes))
+    earned_paid_minutes = max(0, period_expected_minutes - earned_unpaid_minutes)
+    raw_unpaid_minutes = earned_unpaid_minutes + review_held_paid_minutes
     unpaid_minutes = min(period_expected_minutes, max(0, raw_unpaid_minutes))
     paid_minutes = max(0, period_expected_minutes - unpaid_minutes)
 
     base_salary = _money(base_monthly_salary)
     attendance_minute_rate = resolved_rates["auto_minute_rate"]
+    earned_attendance_deduction = _money(min(base_salary, _money(attendance_minute_rate * Decimal(earned_unpaid_minutes))))
     attendance_deduction = _money(min(base_salary, _money(attendance_minute_rate * Decimal(unpaid_minutes))))
     unrecovered_late_minutes = max(0, summary["late_minutes"] + summary["early_leave_minutes"] - summary["late_makeup_minutes"])
     late_penalty_enabled = bool(policy.late_deduction_enabled)
     late_penalty_rate = resolved_rates["resolved_late_deduction_rate"] if late_penalty_enabled else Decimal("0.00")
-    raw_late_penalty_amount = _money(late_penalty_rate * Decimal(unrecovered_late_minutes)) if late_penalty_enabled else Decimal("0.00")
+    # Monthly payroll already converts late/early-leave time into unpaid minutes.
+    # Charging an extra late penalty on top of that produces a double deduction.
+    late_penalty_eligible_minutes = 0
+    raw_late_penalty_amount = (
+        _money(late_penalty_rate * Decimal(late_penalty_eligible_minutes)) if late_penalty_enabled else Decimal("0.00")
+    )
     late_penalty_amount = _money(min(raw_late_penalty_amount, max(Decimal("0.00"), base_salary - attendance_deduction)))
     payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
     overtime_amount = _money((resolved_rates["resolved_overtime_rate"] / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
@@ -417,8 +449,14 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
 
     normal_amount = base_salary
     gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
+    earned_deduction_amount = _money(earned_attendance_deduction + manual_deduction_amount)
     deduction_amount = _money(attendance_deduction + manual_deduction_amount)
-    net_salary = _money(gross_salary - deduction_amount - late_penalty_amount)
+    earned_net_salary = _money(gross_salary - earned_deduction_amount - late_penalty_amount)
+    payable_net_salary = _money(gross_salary - deduction_amount - late_penalty_amount)
+    amount_snapshot = _build_payroll_amount_snapshot(
+        earned_net_salary=earned_net_salary,
+        payable_amount=payable_net_salary,
+    )
 
     needs_review_reasons = list(resolved_rates["review_warnings"])
     if tiny_review_days:
@@ -436,6 +474,8 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "period_expected_minutes": period_expected_minutes,
         "missing_attendance_days": len(missing_workdays),
         "missing_workday_minutes": missing_workday_minutes,
+        "earned_paid_minutes": earned_paid_minutes,
+        "earned_unpaid_minutes": earned_unpaid_minutes,
         "paid_minutes": paid_minutes,
         "attendance_review_held_minutes": review_held_paid_minutes,
         "partial_unpaid_minutes": partial_unpaid_minutes,
@@ -460,18 +500,25 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
         "attendance_deduction": str(attendance_deduction),
+        "earned_attendance_deduction": str(earned_attendance_deduction),
         "manual_deduction_amount": str(manual_deduction_amount),
+        "earned_deduction_amount": str(earned_deduction_amount),
         "deduction_amount": str(deduction_amount),
         "late_penalty_enabled": late_penalty_enabled,
         "late_penalty_rate": str(late_penalty_rate),
+        "late_penalty_eligible_minutes": late_penalty_eligible_minutes,
         "late_penalty_amount": str(late_penalty_amount),
         "automatic_deduction_amount": str(_money(attendance_deduction + late_penalty_amount)),
         "unpaid_vacation_deduction": "0.00",
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
-        "final_net_salary": str(net_salary),
-        "net_salary": str(net_salary),
-        "total_amount": str(net_salary),
+        "final_net_salary": str(earned_net_salary),
+        "net_salary": str(earned_net_salary),
+        "total_amount": str(amount_snapshot["payable_amount"]),
+        "earned_net_salary": str(amount_snapshot["earned_net_salary"]),
+        "payable_amount": str(amount_snapshot["payable_amount"]),
+        "approved_payable_amount": str(amount_snapshot["approved_payable_amount"]),
+        "held_for_review_amount": str(amount_snapshot["held_for_review_amount"]),
         "needs_review_reasons": needs_review_reasons,
     }
     return {
@@ -488,8 +535,8 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "unpaid_vacation_deduction": Decimal("0.00"),
         "adjustment_amount": correction_amount,
         "gross_salary": gross_salary,
-        "net_salary": net_salary,
-        "total_amount": net_salary,
+        "net_salary": amount_snapshot["earned_net_salary"],
+        "total_amount": amount_snapshot["payable_amount"],
         "calculation_data_json": calc_data,
         "needs_review": bool(needs_review_reasons),
     }
@@ -523,6 +570,7 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
 
     gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
     net_salary = _money(gross_salary - deduction_amount)
+    amount_snapshot = _build_payroll_amount_snapshot(earned_net_salary=net_salary)
     calc_data = {
         **summary,
         "absence_days": summary["absence_days"],
@@ -539,9 +587,13 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "late_penalty_amount": "0.00",
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
-        "final_net_salary": str(net_salary),
-        "net_salary": str(net_salary),
-        "total_amount": str(net_salary),
+        "final_net_salary": str(amount_snapshot["earned_net_salary"]),
+        "net_salary": str(amount_snapshot["earned_net_salary"]),
+        "total_amount": str(amount_snapshot["payable_amount"]),
+        "earned_net_salary": str(amount_snapshot["earned_net_salary"]),
+        "payable_amount": str(amount_snapshot["payable_amount"]),
+        "approved_payable_amount": str(amount_snapshot["approved_payable_amount"]),
+        "held_for_review_amount": str(amount_snapshot["held_for_review_amount"]),
     }
     return {
         "salary_type": compensation.salary_type,
@@ -557,8 +609,8 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "unpaid_vacation_deduction": Decimal("0.00"),
         "adjustment_amount": correction_amount,
         "gross_salary": gross_salary,
-        "net_salary": net_salary,
-        "total_amount": net_salary,
+        "net_salary": amount_snapshot["earned_net_salary"],
+        "total_amount": amount_snapshot["payable_amount"],
         "calculation_data_json": calc_data,
     }
 
@@ -578,6 +630,7 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
 
     gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
     net_salary = _money(gross_salary - deduction_amount)
+    amount_snapshot = _build_payroll_amount_snapshot(earned_net_salary=net_salary)
     calc_data = {
         **summary,
         "base_salary": "0.00",
@@ -591,9 +644,13 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "late_penalty_amount": "0.00",
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
-        "final_net_salary": str(net_salary),
-        "net_salary": str(net_salary),
-        "total_amount": str(net_salary),
+        "final_net_salary": str(amount_snapshot["earned_net_salary"]),
+        "net_salary": str(amount_snapshot["earned_net_salary"]),
+        "total_amount": str(amount_snapshot["payable_amount"]),
+        "earned_net_salary": str(amount_snapshot["earned_net_salary"]),
+        "payable_amount": str(amount_snapshot["payable_amount"]),
+        "approved_payable_amount": str(amount_snapshot["approved_payable_amount"]),
+        "held_for_review_amount": str(amount_snapshot["held_for_review_amount"]),
     }
     return {
         "salary_type": compensation.salary_type,
@@ -609,8 +666,8 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "unpaid_vacation_deduction": Decimal("0.00"),
         "adjustment_amount": correction_amount,
         "gross_salary": gross_salary,
-        "net_salary": net_salary,
-        "total_amount": net_salary,
+        "net_salary": amount_snapshot["earned_net_salary"],
+        "total_amount": amount_snapshot["payable_amount"],
         "calculation_data_json": calc_data,
     }
 
@@ -849,7 +906,7 @@ def calculate_employee_payroll(
         if field_name in {"calculation_data_json", "needs_review"}:
             continue
         setattr(payroll, field_name, value)
-    _sync_payroll_balance(payroll)
+    _sync_payroll_balance(payroll, payable_amount=_decimal(results.get("total_amount"), default=str(_decimal(payroll.net_salary))))
 
     payroll.status = "draft"
     payroll.calculated_at = _utc_now()
@@ -1146,14 +1203,26 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
         raise BadRequestException("Resolve high-severity discrepancies before approval")
 
     old_status = payroll.status
+    latest_snapshot = _latest_payroll_snapshot(payroll.id, db)
+    released_payable_amount = _money(
+        _decimal(latest_snapshot.get("approved_payable_amount"), default=str(_decimal(payroll.net_salary)))
+    )
     payroll.status = "approved"
     payroll.approved_at = _utc_now()
+    _sync_payroll_balance(payroll, payable_amount=released_payable_amount)
     create_payroll_history_snapshot(
         payroll,
         old_gross_salary=_decimal(payroll.gross_salary),
         old_net_salary=_decimal(payroll.net_salary),
         reason="payroll_approved",
-        calculation_data_json={"status_before": old_status, "status_after": payroll.status},
+        calculation_data_json={
+            **latest_snapshot,
+            "status_before": old_status,
+            "status_after": payroll.status,
+            "payable_amount": str(released_payable_amount),
+            "approved_payable_amount": str(released_payable_amount),
+            "held_for_review_amount": "0.00",
+        },
         db=db,
         created_by=approved_by,
     )
@@ -1176,6 +1245,15 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
     )
     db.commit()
     db.refresh(payroll)
+    _apply_payroll_snapshot_fields(
+        payroll,
+        {
+            **latest_snapshot,
+            "payable_amount": str(released_payable_amount),
+            "approved_payable_amount": str(released_payable_amount),
+            "held_for_review_amount": "0.00",
+        },
+    )
     return payroll
 
 
@@ -1188,6 +1266,7 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
     old_paid_amount = _decimal(payroll.paid_amount)
     old_balance_amount = _decimal(payroll.balance_amount)
     _sync_payroll_balance(payroll)
+    latest_snapshot = _latest_payroll_snapshot(payroll.id, db)
 
     payment_amount = _money(_decimal(amount)) if amount is not None else payroll.balance_amount
     if payment_amount == Decimal("0.00"):
@@ -1224,6 +1303,7 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
         old_net_salary=_decimal(payroll.net_salary),
         reason="payroll_payment_recorded",
         calculation_data_json={
+            **latest_snapshot,
             "status_before": old_status,
             "status_after": payroll.status,
             "payment_amount": str(payment_amount),
