@@ -75,7 +75,7 @@ def get_payroll_currency(
     current_user: User = Depends(require_authenticated_user),
 ):
     policy = get_or_create_payroll_policy(db)
-    currency = policy.default_currency if policy.default_currency != "ILS" else "USD"
+    currency = policy.default_currency if policy.default_currency != "ILS" else "DZD"
     return api_success({"default_currency": currency})
 
 

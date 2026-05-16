@@ -199,7 +199,7 @@ def seed_payroll_reference_data(db: Session):
                 "payroll_cycle": "monthly",
                 "minimum_overtime_minutes": 30,
                 "allowed_late_minutes": 0,
-                "default_currency": "USD",
+                "default_currency": "DZD",
                 "significant_change_threshold": Decimal("1.00"),
                 "paid_vacation_counts_for_daily": True,
                 "overtime_enabled": True,

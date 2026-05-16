@@ -159,8 +159,8 @@ class WorkSchedulePayload(BaseModel):
     start_time: time
     end_time: time
     break_minutes: int = 0
-    weekly_off_days: list[str] = Field(default_factory=lambda: ["friday"])
-    timezone: str = "UTC"
+    weekly_off_days: list[str] = Field(default_factory=lambda: ["friday", "saturday"])
+    timezone: str = "Africa/Algiers"
     is_default: bool = True
 
     @model_validator(mode="after")
@@ -183,7 +183,7 @@ class PayrollPolicyPayload(BaseModel):
     payroll_cycle: str = "monthly"
     minimum_overtime_minutes: int = 30
     allowed_late_minutes: int = 0
-    default_currency: str = "USD"
+    default_currency: str = "DZD"
     significant_change_threshold: Decimal = Decimal("1.00")
     paid_vacation_counts_for_daily: bool = True
     overtime_enabled: bool = True

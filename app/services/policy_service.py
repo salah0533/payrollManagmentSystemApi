@@ -61,7 +61,7 @@ def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
         payroll_cycle="monthly",
         minimum_overtime_minutes=30,
         allowed_late_minutes=0,
-        default_currency="USD",
+        default_currency="DZD",
         significant_change_threshold=Decimal("1.00"),
         paid_vacation_counts_for_daily=True,
         overtime_enabled=True,
@@ -104,7 +104,7 @@ def get_employee_schedule(employee_id: int, target_date: date, db: Session) -> W
         end_time=end_time,
         break_minutes=60,
         weekly_off_days=["friday", "saturday"],
-        timezone="UTC",
+        timezone="Africa/Algiers",
         is_default=True,
     )
     db.add(schedule)
@@ -170,7 +170,7 @@ def get_employee_compensation(employee_id: int, target_date: date, db: Session) 
         hourly_rate=_decimal(employee.hour_price),
         overtime_rate=_decimal(employee.extra_hours_price),
         late_deduction_rate=_decimal(employee.hour_price) / Decimal("60") if employee.hour_price else Decimal("0.00"),
-        currency="USD",
+        currency="DZD",
         effective_from=employee.joined or target_date,
         effective_to=None,
         is_active=True,
