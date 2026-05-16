@@ -55,13 +55,14 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
                     name="default",
                     payroll_cycle="monthly",
                     minimum_overtime_minutes=30,
+                    minimum_auto_pay_minutes=0,
                     allowed_late_minutes=0,
                     default_currency="USD",
                     significant_change_threshold=Decimal("1.00"),
                     paid_vacation_counts_for_daily=True,
                     overtime_enabled=True,
                     late_makeup_enabled=True,
-                    late_deduction_enabled=True,
+                    late_deduction_enabled=False,
                     auto_recalculate_draft_payroll=True,
                     lock_payroll_after_payment=True,
                     holidays_json=[],
@@ -132,6 +133,7 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
                     employee_id=self.employee.id,
                     work_date=work_date,
                     expected_work_minutes=expected_minutes,
+                    actual_work_minutes=0 if is_absent else expected_minutes + overtime_minutes,
                     normal_paid_minutes=normal_paid_minutes,
                     late_minutes=0,
                     early_leave_minutes=0,
@@ -397,12 +399,18 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(compensation.hourly_rate, Decimal("0.00"))
         self.assertIsNone(compensation.daily_rate_override)
         self.assertIsNone(compensation.hourly_rate_override)
+        self.assertEqual(results["calculation_data_json"]["period_expected_minutes"], 10080)
+        self.assertEqual(results["calculation_data_json"]["paid_minutes"], 9600)
+        self.assertEqual(results["calculation_data_json"]["missing_workday_minutes"], 0)
+        self.assertEqual(results["calculation_data_json"]["attendance_deduction"], "4047.62")
+        self.assertEqual(results["calculation_data_json"]["late_penalty_amount"], "0.00")
+        self.assertEqual(results["attendance_deduction_amount"], Decimal("4047.62"))
         self.assertAlmostEqual(Decimal(results["calculation_data_json"]["resolved_daily_rate"]), Decimal("4047.619047619047619047619048"))
         self.assertEqual(results["calculation_data_json"]["rate_source"], "auto")
         self.assertEqual(results["deduction_amount"], Decimal("4047.62"))
         self.assertEqual(results["net_salary"], Decimal("80952.38"))
 
-    def test_monthly_payroll_uses_explicit_daily_override_for_absence_deduction(self):
+    def test_monthly_payroll_keeps_auto_minute_rate_even_with_daily_override(self):
         period = self._payroll_period_for_month(2026, 5)
         self.db.add(
             EmployeeCompensation(
@@ -428,10 +436,32 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
 
         results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
 
-        self.assertEqual(results["deduction_amount"], Decimal("5000.00"))
-        self.assertEqual(results["net_salary"], Decimal("80000.00"))
+        self.assertEqual(results["deduction_amount"], Decimal("4047.62"))
+        self.assertEqual(results["net_salary"], Decimal("80952.38"))
+        self.assertEqual(results["calculation_data_json"]["attendance_deduction"], "4047.62")
+        self.assertEqual(results["calculation_data_json"]["auto_minute_rate"], "8.432539682539682539682539683")
         self.assertEqual(results["calculation_data_json"]["rate_source"], "override")
         self.assertEqual(results["calculation_data_json"]["rate_sources"]["daily_rate"], "override")
+
+    def test_monthly_payroll_does_not_double_deduct_partial_late_day(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        days = self._month_days(absent_dates={date(2026, 5, 3)})
+        for day in days:
+            if day.work_date == date(2026, 5, 4):
+                day.actual_work_minutes = 420
+                day.normal_paid_minutes = 420
+                day.late_minutes = 60
+                day.unpaid_minutes = 60
+                day.status = "late"
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertEqual(results["calculation_data_json"]["unpaid_minutes"], 540)
+        self.assertEqual(results["calculation_data_json"]["partial_unpaid_minutes"], 60)
+        self.assertEqual(results["attendance_deduction_amount"], Decimal("4553.57"))
+        self.assertEqual(results["late_deduction_amount"], Decimal("0.00"))
+        self.assertEqual(results["net_salary"], Decimal("80446.43"))
 
     def test_monthly_overtime_falls_back_to_auto_hourly_rate_without_override(self):
         period = self._payroll_period_for_month(2026, 5)
@@ -478,6 +508,79 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(payroll.status, "needs_review")
         self.assertTrue(latest_history.calculation_data_json["rate_review_warnings"])
         self.assertIn("daily_rate=16800.00", latest_history.calculation_data_json["rate_review_warnings"][0])
+
+    def test_monthly_payroll_caps_automatic_deduction_at_base_salary(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+
+        results = calculate_monthly_employee_payroll(payroll, period, [], self.db)
+
+        self.assertEqual(results["attendance_deduction_amount"], Decimal("85000.00"))
+        self.assertEqual(results["late_deduction_amount"], Decimal("0.00"))
+        self.assertEqual(results["net_salary"], Decimal("0.00"))
+        self.assertEqual(results["calculation_data_json"]["paid_minutes"], 0)
+
+    def test_monthly_tiny_attendance_can_be_paid_when_minimum_policy_is_disabled(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        work_date = self._working_days_for_period(period)[0]
+        days = [
+            AttendanceDay(
+                employee_id=self.employee.id,
+                work_date=work_date,
+                expected_work_minutes=480,
+                actual_work_minutes=1,
+                normal_paid_minutes=1,
+                late_minutes=0,
+                early_leave_minutes=0,
+                late_makeup_minutes=0,
+                overtime_minutes=0,
+                absence_minutes=0,
+                unpaid_minutes=479,
+                status="present",
+                review_status="approved",
+            )
+        ]
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertEqual(results["calculation_data_json"]["paid_minutes"], 1)
+        self.assertEqual(results["net_salary"], Decimal("8.43"))
+        self.assertFalse(results["needs_review"])
+
+    def test_monthly_tiny_attendance_is_held_for_review_when_minimum_policy_is_enabled(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        policy = self._policy()
+        policy.minimum_auto_pay_minutes = 5
+        self.db.add(policy)
+        self.db.flush()
+        work_date = self._working_days_for_period(period)[0]
+        days = [
+            AttendanceDay(
+                employee_id=self.employee.id,
+                work_date=work_date,
+                expected_work_minutes=480,
+                actual_work_minutes=1,
+                normal_paid_minutes=1,
+                late_minutes=0,
+                early_leave_minutes=0,
+                late_makeup_minutes=0,
+                overtime_minutes=0,
+                absence_minutes=0,
+                unpaid_minutes=479,
+                status="present",
+                review_status="draft",
+            )
+        ]
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertEqual(results["calculation_data_json"]["attendance_review_held_minutes"], 1)
+        self.assertEqual(results["calculation_data_json"]["paid_minutes"], 0)
+        self.assertEqual(results["net_salary"], Decimal("0.00"))
+        self.assertTrue(results["needs_review"])
+        self.assertEqual(days[0].review_status, "needs_review")
 
 
 if __name__ == "__main__":

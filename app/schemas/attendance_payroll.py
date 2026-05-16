@@ -182,13 +182,14 @@ class PayrollPolicyPayload(BaseModel):
     name: str = "default"
     payroll_cycle: str = "monthly"
     minimum_overtime_minutes: int = 30
+    minimum_auto_pay_minutes: int = 0
     allowed_late_minutes: int = 0
     default_currency: str = "DZD"
     significant_change_threshold: Decimal = Decimal("1.00")
     paid_vacation_counts_for_daily: bool = True
     overtime_enabled: bool = True
     late_makeup_enabled: bool = True
-    late_deduction_enabled: bool = True
+    late_deduction_enabled: bool = False
     auto_recalculate_draft_payroll: bool = True
     lock_payroll_after_payment: bool = True
     holidays_json: list[str] = Field(default_factory=list)
@@ -324,6 +325,11 @@ class EmployeePayrollRead(BaseModel):
     approved_at: Optional[datetime]
     paid_at: Optional[datetime]
     notes: Optional[str]
+    attendance_deduction_amount: Decimal = Decimal("0.00")
+    manual_deduction_amount: Decimal = Decimal("0.00")
+    late_penalty_amount: Decimal = Decimal("0.00")
+    calculation_data_json: dict[str, Any] = Field(default_factory=dict)
+    needs_review_reason: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

@@ -75,6 +75,29 @@ def _divide_decimal(numerator: Decimal, denominator: Decimal) -> Decimal:
     return numerator / denominator
 
 
+def _int(value) -> int:
+    return int(value or 0)
+
+
+def _requires_minimum_attendance_review(day: AttendanceDay, minimum_auto_pay_minutes: int) -> bool:
+    if minimum_auto_pay_minutes <= 0:
+        return False
+    if day.status not in {"present", "late"}:
+        return False
+    return 0 < _int(day.actual_work_minutes) < minimum_auto_pay_minutes
+
+
+def _apply_payroll_snapshot_fields(payroll: EmployeePayroll, calculation_data_json: dict | None) -> EmployeePayroll:
+    snapshot = calculation_data_json or {}
+    payroll.calculation_data_json = snapshot
+    payroll.attendance_deduction_amount = _money(_decimal(snapshot.get("attendance_deduction")))
+    payroll.manual_deduction_amount = _money(_decimal(snapshot.get("manual_deduction_amount")))
+    payroll.late_penalty_amount = _money(_decimal(snapshot.get("late_penalty_amount"), default=str(_decimal(payroll.late_deduction_amount))))
+    review_reasons = snapshot.get("needs_review_reasons") or []
+    payroll.needs_review_reason = "; ".join(str(item) for item in review_reasons if str(item).strip()) or None
+    return payroll
+
+
 def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_day_minutes: int, working_days_count: int) -> dict[str, object]:
     period_expected_minutes = working_days_count * expected_day_minutes
     auto_daily_rate = _divide_decimal(base_monthly_salary, Decimal(working_days_count)) if working_days_count else Decimal("0.00")
@@ -278,6 +301,7 @@ def _get_employee_payroll(employee_id: int, payroll_period_id: int, db: Session)
 
 def _attendance_summary(days: list[AttendanceDay], expected_day_minutes: int) -> dict[str, int]:
     summary = {
+        "actual_work_minutes": 0,
         "normal_paid_minutes": 0,
         "overtime_minutes": 0,
         "late_minutes": 0,
@@ -291,6 +315,7 @@ def _attendance_summary(days: list[AttendanceDay], expected_day_minutes: int) ->
     }
 
     for day in days:
+        summary["actual_work_minutes"] += _int(day.actual_work_minutes)
         summary["normal_paid_minutes"] += day.normal_paid_minutes
         summary["overtime_minutes"] += day.overtime_minutes
         summary["late_minutes"] += day.late_minutes
@@ -336,6 +361,20 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         1,
         _minutes_between_times(schedule.start_time, schedule.end_time) - int(schedule.break_minutes or 0),
     )
+    minimum_auto_pay_minutes = max(0, int(getattr(policy, "minimum_auto_pay_minutes", 0) or 0))
+    tiny_review_days = [
+        day
+        for day in days
+        if _requires_minimum_attendance_review(day, minimum_auto_pay_minutes)
+        and day.review_status not in {"approved", "locked"}
+    ]
+    for day in tiny_review_days:
+        if day.review_status != "needs_review":
+            day.review_status = "needs_review"
+            day.reviewed_at = None
+            day.reviewed_by = None
+            db.add(day)
+
     summary = _attendance_summary(days, expected_day_minutes)
     base_monthly_salary = _decimal(compensation.base_monthly_salary)
     resolved_rates = _resolve_monthly_rates(
@@ -347,22 +386,27 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
 
     recorded_dates = {item.work_date for item in days}
     missing_workdays = [day for day in working_days if day not in recorded_dates]
-    unpaid_missing_minutes = len(missing_workdays) * expected_day_minutes
-    deductible_absence_minutes = sum(int(day.absence_minutes or 0) for day in days if day.status != "unpaid_vacation")
+    missing_workday_minutes = len(missing_workdays) * expected_day_minutes
     unpaid_vacation_minutes = sum(day.expected_work_minutes for day in days if day.status == "unpaid_vacation")
     partial_unpaid_minutes = sum(
-        int(day.unpaid_minutes or 0)
+        _int(day.unpaid_minutes)
         for day in days
         if day.status not in {"absent", "unpaid_vacation", "incomplete", "weekly_off", "holiday"}
     )
+    review_held_paid_minutes = sum(_int(day.normal_paid_minutes) for day in tiny_review_days)
+    period_expected_minutes = _int(resolved_rates["period_expected_minutes"])
+    raw_unpaid_minutes = _int(summary["unpaid_minutes"]) + missing_workday_minutes + review_held_paid_minutes
+    unpaid_minutes = min(period_expected_minutes, max(0, raw_unpaid_minutes))
+    paid_minutes = max(0, period_expected_minutes - unpaid_minutes)
 
     base_salary = _money(base_monthly_salary)
-    absence_deduction = _money(resolved_rates["resolved_minute_rate"] * Decimal(deductible_absence_minutes + unpaid_missing_minutes))
-    partial_unpaid_deduction = _money(resolved_rates["resolved_minute_rate"] * Decimal(partial_unpaid_minutes))
-    unpaid_vacation_deduction = _money(resolved_rates["resolved_minute_rate"] * Decimal(unpaid_vacation_minutes))
+    attendance_minute_rate = resolved_rates["auto_minute_rate"]
+    attendance_deduction = _money(min(base_salary, _money(attendance_minute_rate * Decimal(unpaid_minutes))))
     unrecovered_late_minutes = max(0, summary["late_minutes"] + summary["early_leave_minutes"] - summary["late_makeup_minutes"])
-    late_deduction_rate = resolved_rates["resolved_late_deduction_rate"] if policy.late_deduction_enabled else Decimal("0.00")
-    late_deduction_amount = _money(late_deduction_rate * Decimal(unrecovered_late_minutes))
+    late_penalty_enabled = bool(policy.late_deduction_enabled)
+    late_penalty_rate = resolved_rates["resolved_late_deduction_rate"] if late_penalty_enabled else Decimal("0.00")
+    raw_late_penalty_amount = _money(late_penalty_rate * Decimal(unrecovered_late_minutes)) if late_penalty_enabled else Decimal("0.00")
+    late_penalty_amount = _money(min(raw_late_penalty_amount, max(Decimal("0.00"), base_salary - attendance_deduction)))
     payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
     overtime_amount = _money((resolved_rates["resolved_overtime_rate"] / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
 
@@ -373,19 +417,35 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
 
     normal_amount = base_salary
     gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
-    deduction_amount = _money(absence_deduction + partial_unpaid_deduction + manual_deduction_amount)
-    net_salary = _money(gross_salary - deduction_amount - late_deduction_amount - unpaid_vacation_deduction)
+    deduction_amount = _money(attendance_deduction + manual_deduction_amount)
+    net_salary = _money(gross_salary - deduction_amount - late_penalty_amount)
+
+    needs_review_reasons = list(resolved_rates["review_warnings"])
+    if tiny_review_days:
+        held_dates = ", ".join(day.work_date.isoformat() for day in tiny_review_days[:5])
+        if len(tiny_review_days) > 5:
+            held_dates = f"{held_dates}, +{len(tiny_review_days) - 5} more"
+        needs_review_reasons.append(
+            f"Tiny attendance below the {minimum_auto_pay_minutes}-minute auto-pay threshold was held for review on {held_dates}"
+        )
 
     calc_data = {
         **summary,
         "working_days_count": resolved_rates["working_days_count"],
         "expected_day_minutes": expected_day_minutes,
-        "period_expected_minutes": resolved_rates["period_expected_minutes"],
+        "period_expected_minutes": period_expected_minutes,
         "missing_attendance_days": len(missing_workdays),
-        "deductible_absence_minutes": deductible_absence_minutes,
+        "missing_workday_minutes": missing_workday_minutes,
+        "paid_minutes": paid_minutes,
+        "attendance_review_held_minutes": review_held_paid_minutes,
         "partial_unpaid_minutes": partial_unpaid_minutes,
+        "unpaid_minutes_before_cap": raw_unpaid_minutes,
+        "unpaid_minutes": unpaid_minutes,
         "unpaid_vacation_minutes": unpaid_vacation_minutes,
         "base_salary": str(base_salary),
+        "auto_daily_rate": str(resolved_rates["auto_daily_rate"]),
+        "auto_hourly_rate": str(resolved_rates["auto_hourly_rate"]),
+        "auto_minute_rate": str(resolved_rates["auto_minute_rate"]),
         "resolved_daily_rate": str(resolved_rates["resolved_daily_rate"]),
         "resolved_hourly_rate": str(resolved_rates["resolved_hourly_rate"]),
         "resolved_minute_rate": str(resolved_rates["resolved_minute_rate"]),
@@ -394,19 +454,25 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "rate_source": resolved_rates["rate_source"],
         "rate_sources": resolved_rates["rate_sources"],
         "rate_review_warnings": resolved_rates["review_warnings"],
+        "minimum_auto_pay_minutes": minimum_auto_pay_minutes,
         "normal_amount": str(normal_amount),
         "overtime_amount": str(overtime_amount),
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
-        "absence_deduction": str(absence_deduction),
-        "partial_unpaid_deduction": str(partial_unpaid_deduction),
+        "attendance_deduction": str(attendance_deduction),
+        "manual_deduction_amount": str(manual_deduction_amount),
         "deduction_amount": str(deduction_amount),
-        "late_deduction_amount": str(late_deduction_amount),
-        "unpaid_vacation_deduction": str(unpaid_vacation_deduction),
+        "late_penalty_enabled": late_penalty_enabled,
+        "late_penalty_rate": str(late_penalty_rate),
+        "late_penalty_amount": str(late_penalty_amount),
+        "automatic_deduction_amount": str(_money(attendance_deduction + late_penalty_amount)),
+        "unpaid_vacation_deduction": "0.00",
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
+        "final_net_salary": str(net_salary),
         "net_salary": str(net_salary),
         "total_amount": str(net_salary),
+        "needs_review_reasons": needs_review_reasons,
     }
     return {
         "salary_type": compensation.salary_type,
@@ -414,15 +480,18 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "normal_amount": normal_amount,
         "overtime_amount": overtime_amount,
         "bonus_amount": bonus_amount,
+        "attendance_deduction_amount": attendance_deduction,
+        "manual_deduction_amount": manual_deduction_amount,
+        "late_penalty_amount": late_penalty_amount,
         "deduction_amount": deduction_amount,
-        "late_deduction_amount": late_deduction_amount,
-        "unpaid_vacation_deduction": unpaid_vacation_deduction,
+        "late_deduction_amount": late_penalty_amount,
+        "unpaid_vacation_deduction": Decimal("0.00"),
         "adjustment_amount": correction_amount,
         "gross_salary": gross_salary,
         "net_salary": net_salary,
         "total_amount": net_salary,
         "calculation_data_json": calc_data,
-        "needs_review": bool(resolved_rates["review_warnings"]),
+        "needs_review": bool(needs_review_reasons),
     }
 
 
@@ -464,9 +533,13 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "overtime_amount": str(overtime_amount),
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
+        "attendance_deduction": "0.00",
+        "manual_deduction_amount": str(deduction_amount),
         "deduction_amount": str(deduction_amount),
+        "late_penalty_amount": "0.00",
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
+        "final_net_salary": str(net_salary),
         "net_salary": str(net_salary),
         "total_amount": str(net_salary),
     }
@@ -476,6 +549,9 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "normal_amount": normal_amount,
         "overtime_amount": overtime_amount,
         "bonus_amount": bonus_amount,
+        "attendance_deduction_amount": Decimal("0.00"),
+        "manual_deduction_amount": deduction_amount,
+        "late_penalty_amount": Decimal("0.00"),
         "deduction_amount": deduction_amount,
         "late_deduction_amount": Decimal("0.00"),
         "unpaid_vacation_deduction": Decimal("0.00"),
@@ -509,9 +585,13 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "overtime_amount": str(overtime_amount),
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
+        "attendance_deduction": "0.00",
+        "manual_deduction_amount": str(deduction_amount),
         "deduction_amount": str(deduction_amount),
+        "late_penalty_amount": "0.00",
         "adjustment_amount": str(correction_amount),
         "gross_salary": str(gross_salary),
+        "final_net_salary": str(net_salary),
         "net_salary": str(net_salary),
         "total_amount": str(net_salary),
     }
@@ -521,6 +601,9 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "normal_amount": normal_amount,
         "overtime_amount": overtime_amount,
         "bonus_amount": bonus_amount,
+        "attendance_deduction_amount": Decimal("0.00"),
+        "manual_deduction_amount": deduction_amount,
+        "late_penalty_amount": Decimal("0.00"),
         "deduction_amount": deduction_amount,
         "late_deduction_amount": Decimal("0.00"),
         "unpaid_vacation_deduction": Decimal("0.00"),
@@ -815,6 +898,7 @@ def calculate_employee_payroll(
         user_id=created_by,
     )
     db.flush()
+    _apply_payroll_snapshot_fields(payroll, results["calculation_data_json"])
     _notify_payroll_backoffice_status(payroll, db)
     return payroll
 
@@ -1351,6 +1435,19 @@ def delete_payroll_adjustment(adjustment_id: int, db: Session, deleted_by: int |
     return {"deleted": True, "id": adjustment_id}
 
 
+def _latest_payroll_snapshot(employee_payroll_id: int, db: Session) -> dict:
+    history = db.scalar(
+        select(PayrollCalculationHistory.calculation_data_json)
+        .where(PayrollCalculationHistory.employee_payroll_id == employee_payroll_id)
+        .order_by(PayrollCalculationHistory.created_at.desc(), PayrollCalculationHistory.id.desc())
+    )
+    return history or {}
+
+
+def _hydrate_payroll_snapshot(payroll: EmployeePayroll, db: Session) -> EmployeePayroll:
+    return _apply_payroll_snapshot_fields(payroll, _latest_payroll_snapshot(payroll.id, db))
+
+
 def get_payroll_period(period_id: int, db: Session):
     period = db.scalar(
         select(PayrollPeriod)
@@ -1359,6 +1456,8 @@ def get_payroll_period(period_id: int, db: Session):
     )
     if not period:
         raise ResourceNotFoundException("Payroll period")
+    for payroll in period.payrolls:
+        _hydrate_payroll_snapshot(payroll, db)
     return period
 
 
@@ -1443,7 +1542,7 @@ def get_employee_payroll_by_period(employee_id: int, period_id: int, db: Session
         payroll = calculate_employee_payroll(employee_id, period_id, db)
         db.commit()
         db.refresh(payroll)
-    return payroll
+    return _hydrate_payroll_snapshot(payroll, db)
 
 
 def get_payroll_history(employee_payroll_id: int, db: Session):

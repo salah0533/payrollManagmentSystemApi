@@ -341,11 +341,26 @@ def _cap_break_minutes(raw_work_minutes: int, break_minutes: int) -> int:
     return max(0, min(break_minutes, raw_work_minutes))
 
 
+def _requires_minimum_attendance_review(
+    *,
+    status: str,
+    actual_work_minutes: int,
+    minimum_auto_pay_minutes: int,
+) -> bool:
+    if minimum_auto_pay_minutes <= 0:
+        return False
+    if status not in {"present", "late"}:
+        return False
+    return 0 < actual_work_minutes < minimum_auto_pay_minutes
+
+
 def _resolve_review_status(
     *,
     existing_status: str | None,
     has_attendance_time: bool,
     status: str,
+    actual_work_minutes: int,
+    minimum_auto_pay_minutes: int,
     check_in_time: time | None,
     check_out_time: time | None,
     corrected_fields: set[str],
@@ -359,6 +374,12 @@ def _resolve_review_status(
         return "approved"
     if corrected_fields:
         return "approved"
+    if _requires_minimum_attendance_review(
+        status=status,
+        actual_work_minutes=actual_work_minutes,
+        minimum_auto_pay_minutes=minimum_auto_pay_minutes,
+    ):
+        return "needs_review"
     if has_attendance_time:
         return "draft"
     return existing_status or "draft"
@@ -497,6 +518,8 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         existing_status=previous_review_status,
         has_attendance_time=has_attendance_time,
         status=day.status,
+        actual_work_minutes=day.actual_work_minutes,
+        minimum_auto_pay_minutes=max(0, int(getattr(policy, "minimum_auto_pay_minutes", 0) or 0)),
         check_in_time=day.check_in_time,
         check_out_time=day.check_out_time,
         corrected_fields=corrected_fields,
