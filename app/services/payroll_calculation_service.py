@@ -40,6 +40,7 @@ MANAGED_DISCREPANCY_TYPES = {
     "attendance_requires_review",
     "vacation_overlap",
 }
+MONTHLY_RATE_REVIEW_MULTIPLIER = Decimal("2.00")
 
 
 def _utc_now() -> datetime:
@@ -54,6 +55,90 @@ def _decimal(value, default: str = "0.00") -> Decimal:
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _decimal_or_none(value) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(value))
+
+
+def _minutes_between_times(start_value, end_value) -> int:
+    start_dt = datetime.combine(date.today(), start_value)
+    end_dt = datetime.combine(date.today(), end_value)
+    return max(0, int((end_dt - start_dt).total_seconds() // 60))
+
+
+def _divide_decimal(numerator: Decimal, denominator: Decimal) -> Decimal:
+    if denominator == Decimal("0.00"):
+        return Decimal("0.00")
+    return numerator / denominator
+
+
+def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_day_minutes: int, working_days_count: int) -> dict[str, object]:
+    period_expected_minutes = working_days_count * expected_day_minutes
+    auto_daily_rate = _divide_decimal(base_monthly_salary, Decimal(working_days_count)) if working_days_count else Decimal("0.00")
+    auto_hourly_rate = _divide_decimal(base_monthly_salary * Decimal("60"), Decimal(period_expected_minutes)) if period_expected_minutes else Decimal("0.00")
+    auto_minute_rate = _divide_decimal(base_monthly_salary, Decimal(period_expected_minutes)) if period_expected_minutes else Decimal("0.00")
+
+    daily_override = _decimal_or_none(getattr(compensation, "daily_rate_override", None))
+    hourly_override = _decimal_or_none(getattr(compensation, "hourly_rate_override", None))
+    overtime_override = _decimal_or_none(getattr(compensation, "overtime_rate_override", None))
+    late_override = _decimal_or_none(getattr(compensation, "late_deduction_rate_override", None))
+
+    resolved_daily_rate = daily_override if daily_override is not None else auto_daily_rate
+    resolved_hourly_rate = hourly_override if hourly_override is not None else auto_hourly_rate
+    if daily_override is not None:
+        resolved_minute_rate = _divide_decimal(daily_override, Decimal(expected_day_minutes))
+        minute_rate_source = "override"
+    elif hourly_override is not None:
+        resolved_minute_rate = _divide_decimal(hourly_override, Decimal("60"))
+        minute_rate_source = "override"
+    else:
+        resolved_minute_rate = auto_minute_rate
+        minute_rate_source = "auto"
+
+    resolved_late_deduction_rate = late_override if late_override is not None else auto_minute_rate
+    resolved_overtime_rate = overtime_override if overtime_override is not None else auto_hourly_rate
+
+    rate_sources = {
+        "daily_rate": "override" if daily_override is not None else "auto",
+        "hourly_rate": "override" if hourly_override is not None else "auto",
+        "minute_rate": minute_rate_source,
+        "late_deduction_rate": "override" if late_override is not None else "auto",
+        "overtime_rate": "override" if overtime_override is not None else "auto",
+    }
+
+    review_warnings: list[str] = []
+    review_candidates = [
+        ("daily_rate", _decimal(compensation.daily_rate), auto_daily_rate),
+        ("hourly_rate", _decimal(compensation.hourly_rate), auto_hourly_rate),
+        ("daily_rate_override", daily_override, auto_daily_rate),
+        ("hourly_rate_override", hourly_override, auto_hourly_rate),
+    ]
+    for field_name, configured_rate, auto_rate in review_candidates:
+        if configured_rate is None or configured_rate <= Decimal("0.00") or auto_rate <= Decimal("0.00"):
+            continue
+        if configured_rate >= auto_rate * MONTHLY_RATE_REVIEW_MULTIPLIER:
+            review_warnings.append(
+                f"{field_name}={_money(configured_rate)} exceeds the auto-calculated rate {_money(auto_rate)} by at least {MONTHLY_RATE_REVIEW_MULTIPLIER}x"
+            )
+
+    return {
+        "working_days_count": working_days_count,
+        "period_expected_minutes": period_expected_minutes,
+        "auto_daily_rate": auto_daily_rate,
+        "auto_hourly_rate": auto_hourly_rate,
+        "auto_minute_rate": auto_minute_rate,
+        "resolved_daily_rate": resolved_daily_rate,
+        "resolved_hourly_rate": resolved_hourly_rate,
+        "resolved_minute_rate": resolved_minute_rate,
+        "resolved_late_deduction_rate": resolved_late_deduction_rate,
+        "resolved_overtime_rate": resolved_overtime_rate,
+        "rate_sources": rate_sources,
+        "rate_source": "override" if any(source == "override" for source in rate_sources.values()) else "auto",
+        "review_warnings": review_warnings,
+    }
 
 
 def _sync_payroll_balance(payroll: EmployeePayroll) -> None:
@@ -249,28 +334,37 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     working_days = get_working_days(period.start_date, period.end_date, schedule, holidays)
     expected_day_minutes = max(
         1,
-        int((datetime.combine(date.today(), schedule.end_time) - datetime.combine(date.today(), schedule.start_time)).total_seconds() // 60)
-        - int(schedule.break_minutes or 0),
+        _minutes_between_times(schedule.start_time, schedule.end_time) - int(schedule.break_minutes or 0),
     )
     summary = _attendance_summary(days, expected_day_minutes)
-
-    daily_rate = _decimal(compensation.daily_rate)
-    if daily_rate == Decimal("0.00") and working_days:
-        daily_rate = _decimal(compensation.base_monthly_salary) / Decimal(len(working_days))
-    per_minute_rate = daily_rate / Decimal(expected_day_minutes)
+    base_monthly_salary = _decimal(compensation.base_monthly_salary)
+    resolved_rates = _resolve_monthly_rates(
+        compensation,
+        base_monthly_salary=base_monthly_salary,
+        expected_day_minutes=expected_day_minutes,
+        working_days_count=len(working_days),
+    )
 
     recorded_dates = {item.work_date for item in days}
     missing_workdays = [day for day in working_days if day not in recorded_dates]
     unpaid_missing_minutes = len(missing_workdays) * expected_day_minutes
+    deductible_absence_minutes = sum(int(day.absence_minutes or 0) for day in days if day.status != "unpaid_vacation")
+    unpaid_vacation_minutes = sum(day.expected_work_minutes for day in days if day.status == "unpaid_vacation")
+    partial_unpaid_minutes = sum(
+        int(day.unpaid_minutes or 0)
+        for day in days
+        if day.status not in {"absent", "unpaid_vacation", "incomplete", "weekly_off", "holiday"}
+    )
 
-    base_salary = _money(_decimal(compensation.base_monthly_salary))
-    absence_deduction = _money(per_minute_rate * Decimal(summary["absence_minutes"] + unpaid_missing_minutes))
-    unpaid_vacation_deduction = _money(per_minute_rate * Decimal(sum(day.expected_work_minutes for day in days if day.status == "unpaid_vacation")))
+    base_salary = _money(base_monthly_salary)
+    absence_deduction = _money(resolved_rates["resolved_minute_rate"] * Decimal(deductible_absence_minutes + unpaid_missing_minutes))
+    partial_unpaid_deduction = _money(resolved_rates["resolved_minute_rate"] * Decimal(partial_unpaid_minutes))
+    unpaid_vacation_deduction = _money(resolved_rates["resolved_minute_rate"] * Decimal(unpaid_vacation_minutes))
     unrecovered_late_minutes = max(0, summary["late_minutes"] + summary["early_leave_minutes"] - summary["late_makeup_minutes"])
-    late_deduction_rate = _decimal(compensation.late_deduction_rate) if policy.late_deduction_enabled else Decimal("0.00")
+    late_deduction_rate = resolved_rates["resolved_late_deduction_rate"] if policy.late_deduction_enabled else Decimal("0.00")
     late_deduction_amount = _money(late_deduction_rate * Decimal(unrecovered_late_minutes))
     payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
-    overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
+    overtime_amount = _money((resolved_rates["resolved_overtime_rate"] / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
 
     adjustments = _load_adjustments(payroll.id, db)
     bonus_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "bonus"), Decimal("0.00")))
@@ -279,17 +373,33 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
 
     normal_amount = base_salary
     gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
-    deduction_amount = _money(absence_deduction + manual_deduction_amount)
+    deduction_amount = _money(absence_deduction + partial_unpaid_deduction + manual_deduction_amount)
     net_salary = _money(gross_salary - deduction_amount - late_deduction_amount - unpaid_vacation_deduction)
 
     calc_data = {
         **summary,
+        "working_days_count": resolved_rates["working_days_count"],
+        "expected_day_minutes": expected_day_minutes,
+        "period_expected_minutes": resolved_rates["period_expected_minutes"],
         "missing_attendance_days": len(missing_workdays),
+        "deductible_absence_minutes": deductible_absence_minutes,
+        "partial_unpaid_minutes": partial_unpaid_minutes,
+        "unpaid_vacation_minutes": unpaid_vacation_minutes,
         "base_salary": str(base_salary),
+        "resolved_daily_rate": str(resolved_rates["resolved_daily_rate"]),
+        "resolved_hourly_rate": str(resolved_rates["resolved_hourly_rate"]),
+        "resolved_minute_rate": str(resolved_rates["resolved_minute_rate"]),
+        "resolved_late_deduction_rate": str(resolved_rates["resolved_late_deduction_rate"]),
+        "resolved_overtime_rate": str(resolved_rates["resolved_overtime_rate"]),
+        "rate_source": resolved_rates["rate_source"],
+        "rate_sources": resolved_rates["rate_sources"],
+        "rate_review_warnings": resolved_rates["review_warnings"],
         "normal_amount": str(normal_amount),
         "overtime_amount": str(overtime_amount),
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
+        "absence_deduction": str(absence_deduction),
+        "partial_unpaid_deduction": str(partial_unpaid_deduction),
         "deduction_amount": str(deduction_amount),
         "late_deduction_amount": str(late_deduction_amount),
         "unpaid_vacation_deduction": str(unpaid_vacation_deduction),
@@ -312,6 +422,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "net_salary": net_salary,
         "total_amount": net_salary,
         "calculation_data_json": calc_data,
+        "needs_review": bool(resolved_rates["review_warnings"]),
     }
 
 
@@ -652,7 +763,7 @@ def calculate_employee_payroll(
         results = calculate_hourly_employee_payroll(payroll, period, days, db)
 
     for field_name, value in results.items():
-        if field_name == "calculation_data_json":
+        if field_name in {"calculation_data_json", "needs_review"}:
             continue
         setattr(payroll, field_name, value)
     _sync_payroll_balance(payroll)
@@ -663,7 +774,9 @@ def calculate_employee_payroll(
     db.flush()
 
     discrepancies = detect_payroll_discrepancies(employee_id, payroll_period_id, db)
-    if any(item.status == "open" and item.severity == "high" for item in discrepancies):
+    if results.get("needs_review"):
+        payroll.status = "needs_review"
+    elif any(item.status == "open" and item.severity == "high" for item in discrepancies):
         payroll.status = "needs_review"
     elif any(item.status == "open" for item in discrepancies):
         payroll.status = "needs_review"

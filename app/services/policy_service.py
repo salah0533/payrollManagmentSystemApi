@@ -162,20 +162,38 @@ def get_employee_compensation(employee_id: int, target_date: date, db: Session) 
     if not employee:
         raise ResourceNotFoundException("Employee")
 
-    compensation = EmployeeCompensation(
-        employee_id=employee_id,
-        salary_type=SALARY_TYPE_MAP.get(employee.salary_type, "monthly"),
-        base_monthly_salary=_decimal(employee.monthly_price),
-        daily_rate=_decimal(employee.day_price),
-        hourly_rate=_decimal(employee.hour_price),
-        overtime_rate=_decimal(employee.extra_hours_price),
-        late_deduction_rate=_decimal(employee.hour_price) / Decimal("60") if employee.hour_price else Decimal("0.00"),
-        currency="DZD",
-        effective_from=employee.joined or target_date,
-        effective_to=None,
-        is_active=True,
-        created_at=_utc_now(),
-    )
+    salary_type = SALARY_TYPE_MAP.get(employee.salary_type, "monthly")
+    compensation_kwargs = {
+        "employee_id": employee_id,
+        "salary_type": salary_type,
+        "base_monthly_salary": _decimal(employee.monthly_price),
+        "currency": "DZD",
+        "effective_from": employee.joined or target_date,
+        "effective_to": None,
+        "is_active": True,
+        "created_at": _utc_now(),
+        "daily_rate_override": None,
+        "hourly_rate_override": None,
+        "overtime_rate_override": None,
+        "late_deduction_rate_override": None,
+    }
+
+    if salary_type == "monthly":
+        compensation_kwargs.update(
+            daily_rate=Decimal("0.00"),
+            hourly_rate=Decimal("0.00"),
+            overtime_rate=Decimal("0.00"),
+            late_deduction_rate=Decimal("0.00"),
+        )
+    else:
+        compensation_kwargs.update(
+            daily_rate=_decimal(employee.day_price),
+            hourly_rate=_decimal(employee.hour_price),
+            overtime_rate=_decimal(employee.extra_hours_price),
+            late_deduction_rate=_decimal(employee.hour_price) / Decimal("60") if employee.hour_price else Decimal("0.00"),
+        )
+
+    compensation = EmployeeCompensation(**compensation_kwargs)
     db.add(compensation)
     db.flush()
     return compensation

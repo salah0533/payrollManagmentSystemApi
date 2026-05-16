@@ -7,4 +7,5 @@ alembic/*
 !alembic/versions/
 alembic/env.py
 alembic/versions/*
+!alembic/versions/7d5f1a2c9b40_add_monthly_rate_override_columns.py
 !alembic/versions/e7b3c9d2a510_add_payroll_payment_balance_fields.py

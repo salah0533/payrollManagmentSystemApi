@@ -8,12 +8,27 @@ from sqlalchemy.orm import sessionmaker
 
 import app.models  # noqa: F401
 from app.db.base import Base
-from app.models.attendance_payroll import AttendanceDay, EmployeePayroll, PayrollDiscrepancy, PayrollPolicy, WorkSchedule
+from app.models.attendance_payroll import (
+    AttendanceDay,
+    EmployeeCompensation,
+    EmployeePayroll,
+    PayrollCalculationHistory,
+    PayrollDiscrepancy,
+    PayrollPolicy,
+    WorkSchedule,
+)
 from app.models.employees import Employees
 from app.models.payment_types import PaymentTypes
 from app.models.salary_type import SalaryType
 from app.services.attendance_calculation_service import apply_smart_attendance_status_correction, create_attendance_event, delete_attendance_day
-from app.services.payroll_calculation_service import approve_employee_payroll, get_employee_payroll_by_period, get_or_create_payroll_period_for_date
+from app.services.payroll_calculation_service import (
+    approve_employee_payroll,
+    calculate_employee_payroll,
+    calculate_monthly_employee_payroll,
+    get_employee_payroll_by_period,
+    get_or_create_payroll_period_for_date,
+)
+from app.services.policy_service import get_employee_compensation, get_working_days, parse_holidays
 
 
 class AttendancePayrollRefactorTests(unittest.TestCase):
@@ -32,7 +47,7 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
                     start_time=time(9, 0),
                     end_time=time(17, 0),
                     break_minutes=0,
-                    weekly_off_days=["friday"],
+                    weekly_off_days=["friday", "saturday"],
                     timezone="UTC",
                     is_default=True,
                 ),
@@ -69,10 +84,10 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
             hire_date=date(2026, 1, 1),
             dues=Decimal("0.00"),
             salary_type=0,
-            monthly_price=Decimal("3200.00"),
-            day_price=Decimal("120.00"),
-            hour_price=Decimal("15.00"),
-            extra_hours_price=Decimal("20.00"),
+            monthly_price=Decimal("85000.00"),
+            day_price=Decimal("16800.00"),
+            hour_price=Decimal("2100.00"),
+            extra_hours_price=Decimal("2600.00"),
             daily_work_hours=8,
             vacation_days=0,
             is_active=True,
@@ -92,6 +107,54 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
 
     def _policy(self) -> PayrollPolicy:
         return self.db.scalar(select(PayrollPolicy).order_by(PayrollPolicy.id))
+
+    def _payroll_period_for_month(self, year: int, month: int):
+        return get_or_create_payroll_period_for_date(date(year, month, 1), self.db)
+
+    def _working_days_for_period(self, period) -> list[date]:
+        schedule = self._schedule()
+        holidays = parse_holidays(self._policy().holidays_json)
+        return get_working_days(period.start_date, period.end_date, schedule, holidays)
+
+    def _month_days(self, *, absent_dates: set[date] | None = None, overtime_minutes_by_date: dict[date, int] | None = None) -> list[AttendanceDay]:
+        absent_dates = absent_dates or set()
+        overtime_minutes_by_date = overtime_minutes_by_date or {}
+        schedule = self._schedule()
+        expected_minutes = int((datetime.combine(date.today(), schedule.end_time) - datetime.combine(date.today(), schedule.start_time)).total_seconds() // 60)
+        days: list[AttendanceDay] = []
+        period = self._payroll_period_for_month(2026, 5)
+        for work_date in self._working_days_for_period(period):
+            is_absent = work_date in absent_dates
+            overtime_minutes = overtime_minutes_by_date.get(work_date, 0)
+            normal_paid_minutes = 0 if is_absent else expected_minutes
+            days.append(
+                AttendanceDay(
+                    employee_id=self.employee.id,
+                    work_date=work_date,
+                    expected_work_minutes=expected_minutes,
+                    normal_paid_minutes=normal_paid_minutes,
+                    late_minutes=0,
+                    early_leave_minutes=0,
+                    late_makeup_minutes=0,
+                    overtime_minutes=overtime_minutes,
+                    absence_minutes=expected_minutes if is_absent else 0,
+                    unpaid_minutes=expected_minutes if is_absent else 0,
+                    status="absent" if is_absent else "present",
+                    review_status="approved",
+                )
+            )
+        return days
+
+    def _payroll_stub(self, period) -> EmployeePayroll:
+        payroll = EmployeePayroll(
+            payroll_period_id=period.id,
+            employee_id=self.employee.id,
+            salary_type="monthly",
+            status="draft",
+        )
+        self.db.add(payroll)
+        self.db.flush()
+        return payroll
 
     def test_timezone_boundary_uses_schedule_timezone_for_work_date(self):
         schedule = self._schedule()
@@ -319,6 +382,102 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         with self.assertRaises(IntegrityError):
             self.db.commit()
         self.db.rollback()
+
+    def test_monthly_payroll_uses_period_auto_rates_when_no_override_exists(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        absence_date = date(2026, 5, 3)
+        days = self._month_days(absent_dates={absence_date})
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+        compensation = get_employee_compensation(self.employee.id, period.end_date, self.db)
+
+        self.assertEqual(len(self._working_days_for_period(period)), 21)
+        self.assertEqual(compensation.daily_rate, Decimal("0.00"))
+        self.assertEqual(compensation.hourly_rate, Decimal("0.00"))
+        self.assertIsNone(compensation.daily_rate_override)
+        self.assertIsNone(compensation.hourly_rate_override)
+        self.assertAlmostEqual(Decimal(results["calculation_data_json"]["resolved_daily_rate"]), Decimal("4047.619047619047619047619048"))
+        self.assertEqual(results["calculation_data_json"]["rate_source"], "auto")
+        self.assertEqual(results["deduction_amount"], Decimal("4047.62"))
+        self.assertEqual(results["net_salary"], Decimal("80952.38"))
+
+    def test_monthly_payroll_uses_explicit_daily_override_for_absence_deduction(self):
+        period = self._payroll_period_for_month(2026, 5)
+        self.db.add(
+            EmployeeCompensation(
+                employee_id=self.employee.id,
+                salary_type="monthly",
+                base_monthly_salary=Decimal("85000.00"),
+                daily_rate=Decimal("0.00"),
+                hourly_rate=Decimal("0.00"),
+                overtime_rate=Decimal("0.00"),
+                late_deduction_rate=Decimal("0.00"),
+                daily_rate_override=Decimal("5000.00"),
+                hourly_rate_override=None,
+                overtime_rate_override=None,
+                late_deduction_rate_override=None,
+                currency="DZD",
+                effective_from=date(2026, 1, 1),
+                is_active=True,
+            )
+        )
+        self.db.flush()
+        payroll = self._payroll_stub(period)
+        days = self._month_days(absent_dates={date(2026, 5, 3)})
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertEqual(results["deduction_amount"], Decimal("5000.00"))
+        self.assertEqual(results["net_salary"], Decimal("80000.00"))
+        self.assertEqual(results["calculation_data_json"]["rate_source"], "override")
+        self.assertEqual(results["calculation_data_json"]["rate_sources"]["daily_rate"], "override")
+
+    def test_monthly_overtime_falls_back_to_auto_hourly_rate_without_override(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        days = self._month_days(overtime_minutes_by_date={date(2026, 5, 4): 120})
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertAlmostEqual(Decimal(results["calculation_data_json"]["resolved_hourly_rate"]), Decimal("505.9523809523809523809523810"))
+        self.assertEqual(results["overtime_amount"], Decimal("1011.90"))
+        self.assertEqual(results["calculation_data_json"]["rate_sources"]["overtime_rate"], "auto")
+
+    def test_monthly_legacy_daily_or_hourly_rates_trigger_needs_review(self):
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.add(
+            EmployeeCompensation(
+                employee_id=self.employee.id,
+                salary_type="monthly",
+                base_monthly_salary=Decimal("85000.00"),
+                daily_rate=Decimal("16800.00"),
+                hourly_rate=Decimal("2100.00"),
+                overtime_rate=Decimal("0.00"),
+                late_deduction_rate=Decimal("0.00"),
+                daily_rate_override=None,
+                hourly_rate_override=None,
+                overtime_rate_override=None,
+                late_deduction_rate_override=None,
+                currency="DZD",
+                effective_from=date(2026, 1, 1),
+                is_active=True,
+            )
+        )
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        latest_history = self.db.scalar(
+            select(PayrollCalculationHistory)
+            .where(PayrollCalculationHistory.employee_payroll_id == payroll.id)
+            .order_by(PayrollCalculationHistory.id.desc())
+        )
+
+        self.assertEqual(payroll.status, "needs_review")
+        self.assertTrue(latest_history.calculation_data_json["rate_review_warnings"])
+        self.assertIn("daily_rate=16800.00", latest_history.calculation_data_json["rate_review_warnings"][0])
 
 
 if __name__ == "__main__":
