@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.core.localization import LanguageCode
+
 
 class LoginRequest(BaseModel):
     identifier: str = Field(..., min_length=1, max_length=255)
@@ -62,6 +64,7 @@ class AuthMeResponse(BaseModel):
     employee_id: int | None
     username: str
     email: Optional[EmailStr] = None
+    language: LanguageCode
     is_active: bool
     must_change_password: bool
     last_login_at: Optional[datetime] = None
@@ -69,3 +72,6 @@ class AuthMeResponse(BaseModel):
     permissions: list[str]
     employee: Optional[AuthMeEmployee] = None
 
+
+class UpdateLanguageRequest(BaseModel):
+    language: LanguageCode

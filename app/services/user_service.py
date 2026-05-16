@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.localization import DEFAULT_LANGUAGE, normalize_language
 from app.core.security import get_password_hash
 from app.exceptions.base_exception import BadRequestException, ConflictException, ResourceNotFoundException
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
@@ -15,6 +16,27 @@ from app.services.notification_service import NotificationService
 
 class ResourceConflictException(ConflictException):
     pass
+
+
+def ensure_user_language_schema(db: Session) -> None:
+    inspector = inspect(db.bind)
+    if not inspector.has_table("users"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("users")}
+    if "language" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE users "
+                "ADD COLUMN language VARCHAR(5) NOT NULL DEFAULT 'en'"
+            )
+        )
+
+    db.execute(
+        text("UPDATE users SET language = :language WHERE language IS NULL OR TRIM(language) = ''"),
+        {"language": DEFAULT_LANGUAGE},
+    )
+    db.flush()
 
 
 def get_resource_or_404(resource, *, resource_name: str, identifier: int | None = None):
@@ -34,6 +56,7 @@ def _user_loader():
 
 
 def get_user_or_404(user_id: int, db: Session) -> User:
+    ensure_user_language_schema(db)
     return get_resource_or_404(
         db.scalar(select(User).options(*_user_loader()).where(User.id == user_id, User.deleted_at.is_(None))),
         resource_name="User",
@@ -62,6 +85,7 @@ def get_role_or_404(role_id: int, db: Session) -> Role:
 
 
 def get_user_by_identifier(identifier: str, db: Session) -> User | None:
+    ensure_user_language_schema(db)
     return db.scalar(
         select(User)
         .options(*_user_loader())
@@ -139,6 +163,7 @@ def serialize_user(user: User) -> UserRead:
         employee_id=user.employee_id,
         username=user.username,
         email=user.email,
+        language=normalize_language(user.language),
         is_active=user.is_active,
         must_change_password=user.must_change_password,
         last_login_at=user.last_login_at,
@@ -192,6 +217,7 @@ def serialize_auth_me(user: User) -> AuthMeResponse:
         employee_id=user.employee_id,
         username=user.username,
         email=user.email,
+        language=normalize_language(user.language),
         is_active=user.is_active,
         must_change_password=user.must_change_password,
         last_login_at=user.last_login_at,
@@ -202,6 +228,7 @@ def serialize_auth_me(user: User) -> AuthMeResponse:
 
 
 def list_users(db: Session) -> list[UserRead]:
+    ensure_user_language_schema(db)
     users = db.scalars(
         select(User)
         .options(*_user_loader())
@@ -256,6 +283,7 @@ def _validate_employee_role_policy(employee_id: int | None, roles: list[Role]) -
 
 
 def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None = None) -> UserRead:
+    ensure_user_language_schema(db)
     _ensure_unique_username(payload.username, db)
     _ensure_unique_email(payload.email, db)
     _ensure_employee_link_available(payload.employee_id, db)
@@ -267,6 +295,7 @@ def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None =
         username=payload.username,
         email=payload.email,
         password_hash=get_password_hash(payload.password),
+        language=payload.language.value,
         is_active=payload.is_active,
         must_change_password=payload.must_change_password,
     )
@@ -315,7 +344,7 @@ def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None =
 
 def update_user(user_id: int, payload: UserUpdateRequest, db: Session, *, actor: User | None = None) -> UserRead:
     user = get_user_or_404(user_id, db)
-    old_data = serialize_model(user, fields=("username", "email", "employee_id", "is_active", "must_change_password"))
+    old_data = serialize_model(user, fields=("username", "email", "employee_id", "language", "is_active", "must_change_password"))
     old_must_change_password = user.must_change_password
     values = payload.model_dump(exclude_unset=True)
 
@@ -328,6 +357,8 @@ def update_user(user_id: int, payload: UserUpdateRequest, db: Session, *, actor:
     if "employee_id" in values:
         _ensure_employee_link_available(values["employee_id"], db, exclude_user_id=user.id)
         user.employee_id = values["employee_id"]
+    if "language" in values and values["language"] is not None:
+        user.language = values["language"].value
     if "must_change_password" in values:
         user.must_change_password = values["must_change_password"]
     if values.get("is_active") is False:
@@ -346,7 +377,7 @@ def update_user(user_id: int, payload: UserUpdateRequest, db: Session, *, actor:
         entity_type="User",
         entity_id=user.id,
         old_data_json=old_data,
-        new_data_json=serialize_model(user, fields=("username", "email", "employee_id", "is_active", "must_change_password")),
+        new_data_json=serialize_model(user, fields=("username", "email", "employee_id", "language", "is_active", "must_change_password")),
         user_id=actor.id if actor else None,
     )
     if not old_must_change_password and user.must_change_password:

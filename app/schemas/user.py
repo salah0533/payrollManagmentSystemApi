@@ -7,6 +7,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from app.core.localization import LanguageCode
+
 
 class EmployeeStatus(str, Enum):
     active = "active"
@@ -57,6 +59,7 @@ class UserRead(BaseModel):
     employee_id: int | None
     username: str
     email: Optional[EmailStr] = None
+    language: LanguageCode
     is_active: bool
     must_change_password: bool
     last_login_at: Optional[datetime] = None
@@ -70,6 +73,7 @@ class UserCreateRequest(BaseModel):
     email: Optional[EmailStr] = None
     password: str = Field(..., min_length=8, max_length=255)
     employee_id: int | None = None
+    language: LanguageCode = LanguageCode.en
     role_ids: list[int] = Field(default_factory=list)
     is_active: bool = True
     must_change_password: bool = True
@@ -84,6 +88,7 @@ class UserUpdateRequest(BaseModel):
     username: Optional[str] = Field(None, min_length=3, max_length=50)
     email: Optional[EmailStr] = None
     employee_id: int | None = None
+    language: Optional[LanguageCode] = None
     is_active: Optional[bool] = None
     must_change_password: Optional[bool] = None
 

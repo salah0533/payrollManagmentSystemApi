@@ -3,6 +3,7 @@
 ## Core Separation
 
 - `User` is the authentication and security account.
+- `User.language` stores the per-account UI language preference (`en`, `fr`, or `ar`).
 - `Employee` is the HR, attendance, payroll, and vacation profile.
 - A `User` may be linked to one `Employee` through `users.employee_id`.
 - Employees can exist without login accounts.
@@ -65,6 +66,7 @@
 - `POST /auth/login`
 - `POST /auth/refresh`
 - `GET /auth/me`
+- `PATCH /auth/language`
 - `POST /auth/change-password`
 - `POST /auth/logout`
 

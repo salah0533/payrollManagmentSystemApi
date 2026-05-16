@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.core.responses import api_success
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, require_authenticated_user
 from app.models.auth import User
-from app.schemas.auth import ChangePasswordRequest, LoginRequest, LogoutResponse, RefreshTokenRequest
-from app.services.auth_service import change_password, get_me, login, refresh_access_token
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, LogoutResponse, RefreshTokenRequest, UpdateLanguageRequest
+from app.services.auth_service import change_password, get_me, login, refresh_access_token, update_language
 
 
 router = APIRouter()
@@ -27,6 +27,15 @@ def refresh_user_token(payload: RefreshTokenRequest, db: Session = Depends(get_d
 @router.get("/me")
 def auth_me(current_user: User = Depends(get_current_user)):
     return api_success(get_me(current_user))
+
+
+@router.patch("/language")
+def auth_update_language(
+    payload: UpdateLanguageRequest,
+    current_user: User = Depends(require_authenticated_user),
+    db: Session = Depends(get_db),
+):
+    return api_success(update_language(current_user, payload, db))
 
 
 @router.post("/change-password")

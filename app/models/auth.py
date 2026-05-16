@@ -15,6 +15,7 @@ class User(Base):
     username = Column(String(50), nullable=False, unique=True, index=True)
     email = Column(String(255), nullable=True, unique=True, index=True)
     password_hash = Column(String(255), nullable=False)
+    language = Column(String(5), nullable=False, default="en", server_default="en")
     is_active = Column(Boolean, nullable=False, default=True)
     must_change_password = Column(Boolean, nullable=False, default=False)
     last_login_at = Column(DateTime(timezone=True), nullable=True)

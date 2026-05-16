@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_token, get_password_hash, utc_now, verify_password
 from app.exceptions.base_exception import BadRequestException, ForbiddenException, UnauthorizedException
 from app.models.auth import User
-from app.schemas.auth import ChangePasswordRequest, TokenResponse
+from app.schemas.auth import ChangePasswordRequest, TokenResponse, UpdateLanguageRequest
 from app.services.notification_service import NotificationService
 from app.services.audit_service import save_audit_log
 from app.services.user_service import get_user_by_identifier, get_user_or_404, serialize_auth_me
@@ -92,4 +92,23 @@ def change_password(current_user: User, payload: ChangePasswordRequest, db: Sess
 
 
 def get_me(current_user: User):
+    return serialize_auth_me(current_user)
+
+
+def update_language(current_user: User, payload: UpdateLanguageRequest, db: Session):
+    previous_language = current_user.language
+    current_user.language = payload.language.value
+    db.add(current_user)
+    db.flush()
+    save_audit_log(
+        db,
+        action="language_updated",
+        entity_type="User",
+        entity_id=current_user.id,
+        old_data_json={"language": previous_language},
+        new_data_json={"language": current_user.language},
+        user_id=current_user.id,
+    )
+    db.commit()
+    db.refresh(current_user)
     return serialize_auth_me(current_user)

@@ -14,7 +14,7 @@ from app.models.auth import Permission, Role, RolePermission, User, UserRole
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-PASSWORD_CHANGE_ALLOWED_PATHS = {"/auth/me", "/auth/change-password", "/auth/logout"}
+PASSWORD_CHANGE_ALLOWED_PATHS = {"/auth/me", "/auth/change-password", "/auth/logout", "/auth/language"}
 
 
 def _load_user(user_id: int, db: Session) -> User | None:
