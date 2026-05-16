@@ -26,6 +26,7 @@ ATTENDANCE_EVENT_FIELD_MAP = {
     "break_end": "break_end_time",
     "check_out": "check_out_time",
 }
+MANUAL_TIME_FIELDS = ("check_in_time", "break_start_time", "break_end_time", "check_out_time")
 
 
 def _utc_now() -> datetime:
@@ -303,7 +304,7 @@ def _apply_corrections(day: AttendanceDay, db: Session) -> set[str]:
 
     applied_fields: set[str] = set()
     for correction in corrections:
-        if correction.correction_type == "smart_status" and correction.new_values_json:
+        if correction.new_values_json:
             for field_name, field_value in correction.new_values_json.items():
                 if field_name not in {
                     "check_in_time",
@@ -335,6 +336,28 @@ def _apply_corrections(day: AttendanceDay, db: Session) -> set[str]:
 
     day.is_manually_corrected = bool(corrections)
     return applied_fields
+
+
+def _parse_optional_time_value(value) -> time | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return time.fromisoformat(normalized)
+
+
+def _requested_time_updates(payload) -> dict[str, str | None]:
+    updates: dict[str, str | None] = {}
+    for field_name, field_value in (getattr(payload, "new_values_json", None) or {}).items():
+        if field_name in MANUAL_TIME_FIELDS:
+            updates[field_name] = field_value
+
+    field_changed = getattr(payload, "field_changed", None)
+    if field_changed in MANUAL_TIME_FIELDS:
+        updates[field_changed] = getattr(payload, "new_value", None)
+
+    return updates
 
 
 def _cap_break_minutes(raw_work_minutes: int, break_minutes: int) -> int:
@@ -788,20 +811,22 @@ def create_attendance_correction(payload, db: Session):
             db,
         )
     day = _get_or_create_attendance_day(payload.employee_id, payload.work_date, db)
+    requested_updates = _requested_time_updates(payload)
     _validate_attendance_correction(day, payload)
-    current_value = getattr(day, payload.field_changed, None)
+    correction_field = payload.field_changed if len(requested_updates) == 1 and payload.field_changed in requested_updates else "multiple_fields"
+    current_value = getattr(day, payload.field_changed, None) if payload.field_changed in MANUAL_TIME_FIELDS else None
     old_snapshot = _serialize_day_values(day)
     correction = AttendanceCorrection(
         attendance_day_id=day.id,
         employee_id=payload.employee_id,
         original_event_id=payload.original_event_id,
-        field_changed=payload.field_changed,
+        field_changed=correction_field,
         correction_type=payload.correction_type,
         old_value=current_value.isoformat() if isinstance(current_value, time) else (str(current_value) if current_value is not None else None),
-        new_value=payload.new_value,
+        new_value=payload.new_value if correction_field != "multiple_fields" else None,
         old_values_json=old_snapshot,
-        new_values_json={payload.field_changed: payload.new_value},
-        options_json={"source": "field_correction", **(payload.options or {})},
+        new_values_json=requested_updates,
+        options_json={"source": "field_correction", "requested_values": requested_updates, **(payload.options or {})},
         reason=payload.reason,
         corrected_by=payload.corrected_by,
     )
@@ -818,8 +843,8 @@ def create_attendance_correction(payload, db: Session):
         entity_id=correction.id,
         old_data_json=correction.old_values_json,
         new_data_json={
-            "field_changed": payload.field_changed,
-            "requested_value": payload.new_value,
+            "field_changed": correction_field,
+            "requested_values": requested_updates,
             "updated_attendance_day": correction.new_values_json,
             "reason": payload.reason,
         },
@@ -834,40 +859,38 @@ def create_attendance_correction(payload, db: Session):
 def _validate_attendance_correction(day: AttendanceDay, payload) -> None:
     if payload.correction_type != "field":
         return
-    field = payload.field_changed
-    new_time = time.fromisoformat(payload.new_value) if field.endswith("_time") and payload.new_value else None
+    updates = _requested_time_updates(payload)
+    if not updates:
+        raise BadRequestException("Provide at least one attendance time field to correct")
 
-    if field == "break_start_time" and not day.check_in_time:
+    merged_times = {field_name: getattr(day, field_name) for field_name in MANUAL_TIME_FIELDS}
+    for field_name, field_value in updates.items():
+        merged_times[field_name] = _parse_optional_time_value(field_value)
+
+    check_in_time = merged_times["check_in_time"]
+    break_start_time = merged_times["break_start_time"]
+    break_end_time = merged_times["break_end_time"]
+    check_out_time = merged_times["check_out_time"]
+
+    if break_start_time and not check_in_time:
         raise BadRequestException("Set check-in before setting break start")
-    if field == "break_end_time" and not day.break_start_time:
+    if break_end_time and not break_start_time:
         raise BadRequestException("Set break start before setting break end")
-    if field == "check_out_time" and not day.check_in_time:
+    if check_out_time and not check_in_time:
         raise BadRequestException("Set check-in before setting check-out")
-    if field == "check_out_time" and day.break_start_time and not day.break_end_time:
+    if check_out_time and break_start_time and not break_end_time:
         raise BadRequestException("Set break end before setting check-out")
 
-    if not new_time:
-        return
-
-    if field == "check_in_time":
-        if day.break_start_time and new_time >= day.break_start_time:
-            raise BadRequestException("Check-in must be before break start")
-        if day.check_out_time and new_time >= day.check_out_time:
-            raise BadRequestException("Check-in must be before check-out")
-    elif field == "break_start_time":
-        if day.check_in_time and new_time <= day.check_in_time:
-            raise BadRequestException("Break start must be after check-in")
-        if day.break_end_time and new_time >= day.break_end_time:
-            raise BadRequestException("Break start must be before break end")
-        if day.check_out_time and new_time >= day.check_out_time:
-            raise BadRequestException("Break start must be before check-out")
-    elif field == "break_end_time":
-        if day.break_start_time and new_time <= day.break_start_time:
-            raise BadRequestException("Break end must be after break start")
-        if day.check_out_time and new_time >= day.check_out_time:
-            raise BadRequestException("Break end must be before check-out")
-    elif field == "check_out_time" and day.check_in_time and new_time <= day.check_in_time:
-        raise BadRequestException("Check-out must be after check-in")
+    if check_in_time and break_start_time and check_in_time >= break_start_time:
+        raise BadRequestException("Check-in must be before break start")
+    if check_in_time and check_out_time and check_in_time >= check_out_time:
+        raise BadRequestException("Check-in must be before check-out")
+    if break_start_time and break_end_time and break_start_time >= break_end_time:
+        raise BadRequestException("Break start must be before break end")
+    if break_start_time and check_out_time and break_start_time >= check_out_time:
+        raise BadRequestException("Break start must be before check-out")
+    if break_end_time and check_out_time and break_end_time >= check_out_time:
+        raise BadRequestException("Break end must be before check-out")
 
 
 def delete_attendance_day(employee_id: int, work_date: date, db: Session, deleted_by: int | None = None) -> dict[str, int]:

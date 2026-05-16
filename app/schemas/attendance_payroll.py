@@ -32,6 +32,7 @@ class AttendanceCorrectionRequest(BaseModel):
     correction_type: str = "field"
     field_changed: Optional[str] = None
     new_value: Optional[str] = None
+    new_values_json: dict[str, Optional[str]] = Field(default_factory=dict)
     target_status: Optional[str] = None
     options: dict[str, Any] = Field(default_factory=dict)
     original_event_id: Optional[int] = None
@@ -63,10 +64,19 @@ class AttendanceCorrectionRequest(BaseModel):
             raise ValueError(f"field_changed must be one of {sorted(valid)}")
         return value
 
+    @field_validator("new_values_json")
+    @classmethod
+    def validate_new_values_json(cls, value: dict[str, Optional[str]]) -> dict[str, Optional[str]]:
+        valid = {"check_in_time", "break_start_time", "break_end_time", "check_out_time"}
+        invalid = sorted(key for key in value.keys() if key not in valid)
+        if invalid:
+            raise ValueError(f"new_values_json keys must be a subset of {sorted(valid)}")
+        return value
+
     @model_validator(mode="after")
     def validate_correction_payload(self):
-        if self.correction_type == "field" and not self.field_changed:
-            raise ValueError("field_changed is required for field corrections")
+        if self.correction_type == "field" and not self.field_changed and not self.new_values_json:
+            raise ValueError("field_changed or new_values_json is required for field corrections")
         if self.correction_type == "smart_status" and not self.target_status:
             raise ValueError("target_status is required for smart status corrections")
         return self
