@@ -86,9 +86,19 @@ class PayrollPolicySchemaRepairTests(unittest.TestCase):
         policy = get_or_create_payroll_policy(self.db)
 
         self.assertEqual(policy.minimum_auto_pay_minutes, 0)
+        self.assertEqual(policy.annual_vacation_days_by_year, {})
+        self.assertTrue(policy.allow_vacation_carryover)
+        self.assertFalse(policy.reserve_vacation_days_on_pending)
 
         columns = self.db.execute(text("PRAGMA table_info(payroll_policy)")).fetchall()
-        self.assertIn("minimum_auto_pay_minutes", [row[1] for row in columns])
+        column_names = [row[1] for row in columns]
+        self.assertIn("minimum_auto_pay_minutes", column_names)
+        self.assertIn("annual_vacation_days_by_year", column_names)
+        self.assertIn("allow_vacation_carryover", column_names)
+        self.assertIn("max_vacation_carryover_days", column_names)
+        self.assertIn("carryover_expiry_month", column_names)
+        self.assertIn("carryover_expiry_day", column_names)
+        self.assertIn("reserve_vacation_days_on_pending", column_names)
 
 
 if __name__ == "__main__":

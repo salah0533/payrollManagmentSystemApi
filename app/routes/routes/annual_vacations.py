@@ -1,12 +1,35 @@
+from datetime import date
+
 from fastapi import APIRouter,Depends
 from sqlalchemy.orm import Session
 from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_hr_or_admin, require_self_or_permission
 from app.models.auth import User
-from app.services.annual_vacations import get_ann_vac as get_ann_vac_svc,get_used_vac_days,check_vacation_year,get_all_ann_vac,add_new_ann_vac as add_new_ann_vac_src ,update_ann_vac,delete_ann_vac
+from app.services.annual_vacations import get_ann_vac as get_ann_vac_svc,get_used_vac_days,get_all_ann_vac,add_new_ann_vac as add_new_ann_vac_src ,update_ann_vac,delete_ann_vac
+from app.services.vacation_balance_service import get_employee_vacation_balance
 from app.schemas.annualVcationModel import AnnualVacationModel,DeleteAnnualVacationModel
 router = APIRouter()
+
+
+@router.get("/balance/{emp_id}")
+def get_vacation_balance(
+    emp_id: int,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    as_of: date | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_self_or_permission("employees.read", employee_param="emp_id")),
+):
+    return api_success(
+        get_employee_vacation_balance(
+            emp_id,
+            db,
+            start_year=start_year,
+            end_year=end_year,
+            as_of=as_of,
+        )
+    )
 
 
 @router.get("/{emp_id}")

@@ -68,6 +68,12 @@ class PayrollPolicy(Base):
     auto_recalculate_draft_payroll = Column(Boolean, nullable=False, default=True)
     lock_payroll_after_payment = Column(Boolean, nullable=False, default=True)
     holidays_json = Column(JSON, nullable=False, default=list)
+    annual_vacation_days_by_year = Column(JSON, nullable=False, default=dict)
+    allow_vacation_carryover = Column(Boolean, nullable=False, default=True)
+    max_vacation_carryover_days = Column(Integer, nullable=True)
+    carryover_expiry_month = Column(Integer, nullable=True)
+    carryover_expiry_day = Column(Integer, nullable=True)
+    reserve_vacation_days_on_pending = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 

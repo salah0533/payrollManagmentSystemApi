@@ -1,5 +1,6 @@
 from datetime import date, datetime, time
 from decimal import Decimal
+from calendar import monthrange
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -203,6 +204,12 @@ class PayrollPolicyPayload(BaseModel):
     auto_recalculate_draft_payroll: bool = True
     lock_payroll_after_payment: bool = True
     holidays_json: list[str] = Field(default_factory=list)
+    annual_vacation_days_by_year: dict[str, int] = Field(default_factory=dict)
+    allow_vacation_carryover: bool = True
+    max_vacation_carryover_days: Optional[int] = None
+    carryover_expiry_month: Optional[int] = None
+    carryover_expiry_day: Optional[int] = None
+    reserve_vacation_days_on_pending: bool = False
 
     @field_validator("default_currency")
     @classmethod
@@ -213,6 +220,63 @@ class PayrollPolicyPayload(BaseModel):
         if len(normalized) != 3 or not normalized.isalpha():
             raise ValueError("default_currency must be a 3-letter ISO currency code")
         return normalized
+
+    @field_validator("annual_vacation_days_by_year", mode="before")
+    @classmethod
+    def normalize_annual_vacation_days_by_year(cls, value: Any) -> dict[str, int]:
+        if value in (None, ""):
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("annual_vacation_days_by_year must be an object keyed by year")
+
+        normalized: dict[str, int] = {}
+        for raw_year, raw_days in value.items():
+            year = str(raw_year).strip()
+            if not year.isdigit() or len(year) != 4:
+                raise ValueError("annual_vacation_days_by_year keys must be 4-digit years")
+            days = int(raw_days)
+            if days <= 0:
+                raise ValueError("annual vacation days must be greater than zero")
+            normalized[year] = days
+        return normalized
+
+    @field_validator("max_vacation_carryover_days")
+    @classmethod
+    def validate_max_vacation_carryover_days(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value < 0:
+            raise ValueError("max_vacation_carryover_days cannot be negative")
+        return value
+
+    @field_validator("carryover_expiry_month")
+    @classmethod
+    def validate_carryover_expiry_month(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and not 1 <= value <= 12:
+            raise ValueError("carryover_expiry_month must be between 1 and 12")
+        return value
+
+    @field_validator("carryover_expiry_day")
+    @classmethod
+    def validate_carryover_expiry_day(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and not 1 <= value <= 31:
+            raise ValueError("carryover_expiry_day must be between 1 and 31")
+        return value
+
+    @model_validator(mode="after")
+    def validate_vacation_policy(self):
+        if (self.carryover_expiry_month is None) != (self.carryover_expiry_day is None):
+            raise ValueError("carryover_expiry_month and carryover_expiry_day must both be provided together")
+
+        if self.carryover_expiry_month is not None and self.carryover_expiry_day is not None:
+            max_day = monthrange(2025, self.carryover_expiry_month)[1]
+            if self.carryover_expiry_day > max_day:
+                raise ValueError("carryover_expiry_day is not valid for the selected month")
+
+        if not self.allow_vacation_carryover:
+            self.max_vacation_carryover_days = None
+            self.carryover_expiry_month = None
+            self.carryover_expiry_day = None
+
+        return self
 
 
 class PayrollPolicyRead(PayrollPolicyPayload):

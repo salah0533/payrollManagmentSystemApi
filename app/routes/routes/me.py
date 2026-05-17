@@ -17,6 +17,7 @@ from app.services.attendance_calculation_service import create_attendance_event,
 from app.services.notification_service import NotificationService
 from app.services.payroll_calculation_service import get_payroll_balance_report, list_payroll_periods
 from app.services.user_service import get_employee_or_404, serialize_employee
+from app.services.vacation_balance_service import get_employee_vacation_balance
 from app.services.vacation_service import add_vacation, get_emp_all_vacations, overlab_check
 
 
@@ -104,6 +105,25 @@ def request_my_vacation(
         actor=current_user,
     )
     return api_success(status_code=201)
+
+
+@router.get("/vacation-balance")
+def get_my_vacation_balance(
+    start_year: int | None = None,
+    end_year: int | None = None,
+    as_of: Date | None = None,
+    current_user: User = Depends(require_permissions("vacations.read_own")),
+    db: Session = Depends(get_db),
+):
+    return api_success(
+        get_employee_vacation_balance(
+            _current_employee_id(current_user),
+            db,
+            start_year=start_year,
+            end_year=end_year,
+            as_of=as_of,
+        )
+    )
 
 
 def _handle_self_attendance_action(

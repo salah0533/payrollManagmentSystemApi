@@ -53,6 +53,48 @@ def _ensure_payroll_policy_schema(db: Session) -> None:
                 "ADD COLUMN minimum_auto_pay_minutes INTEGER NOT NULL DEFAULT 0"
             )
         )
+    if "annual_vacation_days_by_year" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN annual_vacation_days_by_year JSON NOT NULL DEFAULT '{}'"
+            )
+        )
+    if "allow_vacation_carryover" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN allow_vacation_carryover BOOLEAN NOT NULL DEFAULT 1"
+            )
+        )
+    if "max_vacation_carryover_days" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN max_vacation_carryover_days INTEGER"
+            )
+        )
+    if "carryover_expiry_month" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN carryover_expiry_month INTEGER"
+            )
+        )
+    if "carryover_expiry_day" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN carryover_expiry_day INTEGER"
+            )
+        )
+    if "reserve_vacation_days_on_pending" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN reserve_vacation_days_on_pending BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
 
 
 def get_schedule_timezone(schedule: WorkSchedule) -> tzinfo:
@@ -87,6 +129,12 @@ def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
         auto_recalculate_draft_payroll=True,
         lock_payroll_after_payment=True,
         holidays_json=[],
+        annual_vacation_days_by_year={},
+        allow_vacation_carryover=True,
+        max_vacation_carryover_days=None,
+        carryover_expiry_month=None,
+        carryover_expiry_day=None,
+        reserve_vacation_days_on_pending=False,
     )
     db.add(policy)
     db.flush()

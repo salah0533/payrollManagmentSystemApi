@@ -10,6 +10,7 @@ from app.models.types.vacationStatus import VacationStatuses
 from app.schemas.vacationBaseModel import VacationBaseModel, UpdateVacationBaseModel
 from app.services.notification_service import NotificationService
 from app.services.payroll_calculation_service import sync_vacation_with_payroll
+from app.services.vacation_balance_service import VacationLedgerEntry, ensure_vacation_balance_available
 
 
 def _vacation_title(status_code: str) -> str:
@@ -130,6 +131,18 @@ def get_emp_all_vacations(emp_id:int,db:Session):
 
     
 def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = None):
+    ensure_vacation_balance_available(
+        VacationLedgerEntry(
+            id=None,
+            employee_id=vac.employee_id,
+            start_date=vac.start_date,
+            end_date=vac.end_date,
+            vacation_type=vac.vacation_type,
+            vacation_status=vac.vacation_status,
+            is_paid=vac.is_paid,
+        ),
+        db,
+    )
     new_vac = Vacation(
         employee_id=vac.employee_id,
         start_date=vac.start_date,
@@ -164,6 +177,19 @@ def update_vacation(updated_vac: UpdateVacationBaseModel, db: Session, *, actor:
         if val is None or key == "id":
             continue
         setattr(vac,key,val)
+    ensure_vacation_balance_available(
+        VacationLedgerEntry(
+            id=vac.id,
+            employee_id=vac.employee_id,
+            start_date=vac.start_date,
+            end_date=vac.end_date,
+            vacation_type=vac.vacation_type,
+            vacation_status=vac.vacation_status,
+            is_paid=vac.is_paid,
+        ),
+        db,
+        exclude_vacation_id=vac.id,
+    )
     db.flush()
     if vac.vacation_status == int(VacationStatuses.approved):
         sync_vacation_with_payroll(vac.employee_id, vac.start_date, vac.end_date, db, reason="vacation_approved")

@@ -209,6 +209,12 @@ def seed_payroll_reference_data(db: Session):
                 "auto_recalculate_draft_payroll": True,
                 "lock_payroll_after_payment": True,
                 "holidays_json": [],
+                "annual_vacation_days_by_year": {},
+                "allow_vacation_carryover": True,
+                "max_vacation_carryover_days": None,
+                "carryover_expiry_month": None,
+                "carryover_expiry_day": None,
+                "reserve_vacation_days_on_pending": False,
             },
         )
     else:
