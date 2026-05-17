@@ -122,6 +122,7 @@ class EmployeeBasePayload(BaseModel):
     dues: Decimal = Decimal("0.00")
     extra_hours_price: Decimal = Decimal("0.00")
     vacation_days: int = 0
+    auto_attendance_enabled: bool = False
     hour_price: Decimal = Decimal("0.00")
     day_price: Decimal = Decimal("0.00")
     monthly_price: Decimal = Field(Decimal("0.00"), alias="month_price")
@@ -167,6 +168,7 @@ class EmployeeUpdateRequest(BaseModel):
     dues: Optional[Decimal] = None
     extra_hours_price: Optional[Decimal] = None
     vacation_days: Optional[int] = None
+    auto_attendance_enabled: Optional[bool] = None
     hour_price: Optional[Decimal] = None
     day_price: Optional[Decimal] = None
     monthly_price: Optional[Decimal] = Field(None, alias="month_price")
@@ -193,6 +195,8 @@ class EmployeeRead(BaseModel):
     hour_price: Decimal
     extra_hours_price: Decimal
     vacation_days: int
+    auto_attendance_enabled: bool
+    auto_attendance_effective_from: Optional[date] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime

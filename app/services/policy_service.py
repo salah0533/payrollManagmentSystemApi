@@ -41,7 +41,7 @@ def _utc_now() -> datetime:
 
 
 def _ensure_payroll_policy_schema(db: Session) -> None:
-    inspector = inspect(db.bind)
+    inspector = inspect(db.connection())
     if not inspector.has_table("payroll_policy"):
         return
 

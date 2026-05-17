@@ -13,6 +13,7 @@ from app.models.types.vacationStatus import VacationStatuses
 from app.schemas.attendance_payroll import AttendanceDayRead, EmployeePayrollRead
 from app.schemas.user import SelfAttendanceActionRequest, SelfVacationRequestCreate
 from app.schemas.vacationBaseModel import VacationBaseModel
+from app.services.auto_attendance_service import enforce_self_service_auto_attendance_policy
 from app.services.attendance_calculation_service import create_attendance_event, get_attendance_days
 from app.services.notification_service import NotificationService
 from app.services.payroll_calculation_service import get_payroll_balance_report, list_payroll_periods
@@ -134,6 +135,7 @@ def _handle_self_attendance_action(
     db: Session,
 ):
     employee_id = _current_employee_id(current_user)
+    enforce_self_service_auto_attendance_policy(employee_id, db)
     event_time = payload.event_time or datetime.now(timezone.utc)
     event, day = create_attendance_event(
         employee_id=employee_id,

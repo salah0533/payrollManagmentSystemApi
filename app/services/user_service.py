@@ -19,7 +19,7 @@ class ResourceConflictException(ConflictException):
 
 
 def ensure_user_language_schema(db: Session) -> None:
-    inspector = inspect(db.bind)
+    inspector = inspect(db.connection())
     if not inspector.has_table("users"):
         return
 
@@ -193,6 +193,8 @@ def serialize_employee(employee: Employees) -> EmployeeRead:
         hour_price=employee.hour_price,
         extra_hours_price=employee.extra_hours_price,
         vacation_days=employee.vacation_days,
+        auto_attendance_enabled=bool(getattr(employee, "auto_attendance_enabled", False)),
+        auto_attendance_effective_from=getattr(employee, "auto_attendance_effective_from", None),
         is_active=employee.is_active,
         created_at=employee.created_at,
         updated_at=employee.updated_at,

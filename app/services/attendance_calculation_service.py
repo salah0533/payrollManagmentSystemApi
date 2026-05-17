@@ -393,7 +393,7 @@ def _resolve_review_status(
         return "locked"
     if status == "incomplete" or (has_attendance_time and (not check_in_time or not check_out_time)):
         return "needs_review"
-    if trigger_reason in {"attendance_correction", "smart_status_correction", "mark_all_present", "legacy_migration"}:
+    if trigger_reason in {"attendance_correction", "smart_status_correction", "mark_all_present", "legacy_migration", "auto_attendance"}:
         return "approved"
     if corrected_fields:
         return "approved"

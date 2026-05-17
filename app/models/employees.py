@@ -26,6 +26,8 @@ class Employees(Base):
     extra_hours_price = Column(DECIMAL, nullable=False)
     daily_work_hours = Column(Integer, nullable=False)
     vacation_days = Column(Integer, nullable=False, default=0)
+    auto_attendance_enabled = Column(Boolean, nullable=False, default=False)
+    auto_attendance_effective_from = Column(Date, nullable=True)
     is_active = Column(Boolean,nullable=False)
     allowed_late = Column(DECIMAL,nullable=False)
     min_extraTime = Column(DECIMAL,nullable=False) # not paid
@@ -69,6 +71,8 @@ class Employees(Base):
             "daily_work_hours":self.daily_work_hours,
             "extra_hours_price":self.extra_hours_price,
             "vacation_days": self.vacation_days,
+            "auto_attendance_enabled": self.auto_attendance_enabled,
+            "auto_attendance_effective_from": self.auto_attendance_effective_from,
             "hour_price":self.hour_price,
             "day_price":self.day_price,
             "monthly_price":self.monthly_price,

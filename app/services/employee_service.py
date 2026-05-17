@@ -12,6 +12,7 @@ from app.models.auth import User
 from app.models.employee_reference import Department, Position
 from app.models.employees import Employees
 from app.schemas.user import EmployeeCreateRequest, EmployeeRead, EmployeeUpdateRequest, UserCreateRequest
+from app.services.auto_attendance_service import resolve_auto_attendance_effective_from
 from app.services.audit_service import save_audit_log, serialize_model
 from app.services.policy_service import get_default_work_schedule, get_or_create_payroll_policy
 from app.services.user_service import ResourceConflictException, get_resource_or_404
@@ -138,6 +139,23 @@ def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | 
             setattr(employee, field_name, data[field_name])
 
 
+def _sync_employee_auto_attendance(
+    employee: Employees,
+    payload: EmployeeCreateRequest | EmployeeUpdateRequest,
+    db: Session,
+) -> None:
+    data = payload.model_dump(exclude_unset=True, by_alias=False)
+    if "auto_attendance_enabled" in data and data["auto_attendance_enabled"] is not None:
+        employee.auto_attendance_enabled = bool(data["auto_attendance_enabled"])
+
+    if not employee.auto_attendance_enabled or not employee.is_active:
+        employee.auto_attendance_effective_from = None
+        return
+
+    if "auto_attendance_enabled" in data or employee.auto_attendance_effective_from is None:
+        employee.auto_attendance_effective_from = resolve_auto_attendance_effective_from(employee.id, db)
+
+
 def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | None = None) -> EmployeeRead:
     legacy_defaults = _legacy_attendance_defaults(db)
     employee = Employees(
@@ -159,6 +177,8 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
         hour_price=payload.hour_price,
         extra_hours_price=payload.extra_hours_price,
         vacation_days=payload.vacation_days,
+        auto_attendance_enabled=False,
+        auto_attendance_effective_from=None,
         daily_work_hours=int(legacy_defaults["daily_work_hours"]),
         is_active=payload.status.value == "active",
         allowed_late=legacy_defaults["allowed_late"],
@@ -167,6 +187,8 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
     )
     _sync_employee_fields(employee, payload, db)
     db.add(employee)
+    db.flush()
+    _sync_employee_auto_attendance(employee, payload, db)
     db.flush()
 
     if payload.create_user_account:
@@ -209,6 +231,7 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
 
     old_data = serialize_model(employee)
     _sync_employee_fields(employee, payload, db)
+    _sync_employee_auto_attendance(employee, payload, db)
     db.add(employee)
     db.flush()
     save_audit_log(
