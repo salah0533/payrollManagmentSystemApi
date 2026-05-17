@@ -10,6 +10,7 @@ def get_ann_vac(emp_id:int,db:Session):
     return db.scalars(
         select(AnnualVacations)
         .where(AnnualVacations.employee_id==emp_id)
+        .order_by(AnnualVacations.year.asc())
     ).all()
 def get_all_ann_vac(emp_id:int,db:Session):
     return {
@@ -52,15 +53,22 @@ def check_vacation_year(emp_id,year,db:Session):
         return False
     
 def add_new_ann_vac(req:AnnualVacationModel,db:Session):
-    new = AnnualVacations(year=req.year,employee_id=req.emp_id,allowed_days=req.allowed_days)
-    db.add(new)
+    record = db.get(AnnualVacations, (req.year, req.emp_id))
+    if record is None:
+        record = AnnualVacations(year=req.year,employee_id=req.emp_id,allowed_days=req.allowed_days)
+    else:
+        record.allowed_days = req.allowed_days
+    db.add(record)
     db.commit()
 
 def update_ann_vac(req:AnnualVacationModel,db:Session):
     ann_vac = db.get(AnnualVacations,(req.year,req.emp_id))
-    if ann_vac:
+    if ann_vac is None:
+        ann_vac = AnnualVacations(year=req.year, employee_id=req.emp_id, allowed_days=req.allowed_days)
+    else:
         ann_vac.allowed_days = req.allowed_days
-        db.commit()
+    db.add(ann_vac)
+    db.commit()
 
 def delete_ann_vac(req:DeleteAnnualVacationModel,db:Session):
     ann_vac = db.get(AnnualVacations,(req.year,req.emp_id))

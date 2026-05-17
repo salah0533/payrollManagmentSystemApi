@@ -36,23 +36,7 @@ def _get_employee_or_404(employee_id: int, db: Session) -> Employees:
     return employee
 
 
-def _normalize_yearly_policy(raw_value: object) -> dict[int, int]:
-    if not isinstance(raw_value, dict):
-        return {}
-
-    normalized: dict[int, int] = {}
-    for raw_year, raw_days in raw_value.items():
-        try:
-            year = int(str(raw_year).strip())
-            days = int(raw_days)
-        except (TypeError, ValueError):
-            continue
-        if year > 0 and days > 0:
-            normalized[year] = days
-    return normalized
-
-
-def _get_employee_overrides(employee_id: int, db: Session) -> dict[int, int]:
+def _get_employee_entitlements(employee_id: int, db: Session) -> dict[int, int]:
     rows = db.scalars(
         select(AnnualVacations).where(AnnualVacations.employee_id == employee_id)
     ).all()
@@ -136,20 +120,19 @@ def _resolve_entitlement_days(
     year: int,
     *,
     employee: Employees,
-    employee_overrides: dict[int, int],
-    yearly_policy: dict[int, int],
+    employee_entitlements: dict[int, int],
 ) -> tuple[int, int | None, str]:
-    if year in employee_overrides:
-        return employee_overrides[year], year, "employee_override"
+    if year in employee_entitlements:
+        return employee_entitlements[year], year, "employee_year"
 
-    eligible_policy_years = [configured_year for configured_year in yearly_policy.keys() if configured_year <= year]
-    if eligible_policy_years:
-        source_year = max(eligible_policy_years)
-        source = "configured" if source_year == year else "fallback_previous_year"
-        return yearly_policy[source_year], source_year, source
+    eligible_previous_years = [configured_year for configured_year in employee_entitlements.keys() if configured_year <= year]
+    if eligible_previous_years:
+        source_year = max(eligible_previous_years)
+        source = "employee_year" if source_year == year else "fallback_previous_employee_year"
+        return employee_entitlements[source_year], source_year, source
 
     default_days = int(employee.vacation_days or 0)
-    if default_days > 0 and not yearly_policy:
+    if default_days > 0 and not employee_entitlements:
         return default_days, None, "employee_default"
 
     return 0, None, "unconfigured"
@@ -168,8 +151,7 @@ def get_employee_vacation_balance(
     employee = _get_employee_or_404(employee_id, db)
     policy = get_or_create_payroll_policy(db)
     annual_type_ids = _get_annual_vacation_type_ids(db)
-    employee_overrides = _get_employee_overrides(employee_id, db)
-    yearly_policy = _normalize_yearly_policy(getattr(policy, "annual_vacation_days_by_year", {}))
+    employee_entitlements = _get_employee_entitlements(employee_id, db)
     ledger_entries = _load_ledger_entries(
         employee_id,
         db,
@@ -179,12 +161,7 @@ def get_employee_vacation_balance(
     as_of_date = as_of or date.today()
 
     all_years: set[int] = {as_of_date.year}
-    if employee.joined:
-        all_years.add(employee.joined.year)
-    if employee.hire_date:
-        all_years.add(employee.hire_date.year)
-    all_years.update(employee_overrides.keys())
-    all_years.update(yearly_policy.keys())
+    all_years.update(employee_entitlements.keys())
     for entry in ledger_entries:
         all_years.add(entry.start_date.year)
         all_years.add(entry.end_date.year)
@@ -253,8 +230,7 @@ def get_employee_vacation_balance(
         entitlement_days, source_year, source = _resolve_entitlement_days(
             year,
             employee=employee,
-            employee_overrides=employee_overrides,
-            yearly_policy=yearly_policy,
+            employee_entitlements=employee_entitlements,
         )
         metrics = year_metrics.get(
             year,
@@ -327,7 +303,6 @@ def get_employee_vacation_balance(
         "employee_name": employee.fullname,
         "as_of": as_of_date.isoformat(),
         "policy": {
-            "annual_vacation_days_by_year": {str(year): days for year, days in sorted(yearly_policy.items())},
             "allow_vacation_carryover": allow_carryover,
             "max_vacation_carryover_days": int(max_carryover_days) if max_carryover_days is not None else None,
             "carryover_expiry_month": getattr(policy, "carryover_expiry_month", None),
