@@ -114,12 +114,17 @@ def get_employee_vacations(id:int,start,end,db:Session):
     ).all()
 
 def overlab_check(id:int,start,end,db:Session):
+    blocking_statuses = (
+        int(VacationStatuses.pending),
+        int(VacationStatuses.approved),
+    )
     return db.scalars(
     select(Vacation)
     .where(
         Vacation.employee_id == id,
         Vacation.start_date <= end,
-        Vacation.end_date >= start
+        Vacation.end_date >= start,
+        Vacation.vacation_status.in_(blocking_statuses),
     )).all()
 
 def get_emp_all_vacations(emp_id:int,db:Session):

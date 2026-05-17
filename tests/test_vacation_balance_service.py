@@ -12,9 +12,11 @@ from app.models.attendance_payroll import PayrollPolicy
 from app.models.annual_vacation import AnnualVacations
 from app.models.employees import Employees
 from app.models.salary_type import SalaryType
+from app.models.types.vacationStatus import VacationStatuses
 from app.models.vacation import Vacation
 from app.models.vacation_status import VacationStatus
 from app.models.vacation_types import VacationTypes
+from app.services.vacation_service import overlab_check
 from app.services.vacation_balance_service import (
     VacationLedgerEntry,
     ensure_vacation_balance_available,
@@ -297,6 +299,42 @@ class VacationBalanceServiceTests(unittest.TestCase):
 
         self.assertEqual(first_balance["years"][0]["entitlement_days"], 21)
         self.assertEqual(second_balance["years"][0]["entitlement_days"], 28)
+
+    def test_overlap_check_ignores_rejected_and_cancelled_vacations(self):
+        self._add_vacation(
+            start_date=date(2026, 5, 1),
+            end_date=date(2026, 5, 20),
+            status=int(VacationStatuses.rejected),
+        )
+        self._add_vacation(
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 10),
+            status=int(VacationStatuses.cancelled),
+        )
+
+        may_overlap = overlab_check(self.employee.id, date(2026, 5, 1), date(2026, 5, 10), self.db)
+        june_overlap = overlab_check(self.employee.id, date(2026, 6, 3), date(2026, 6, 5), self.db)
+
+        self.assertEqual(may_overlap, [])
+        self.assertEqual(june_overlap, [])
+
+    def test_overlap_check_blocks_pending_and_approved_vacations(self):
+        self._add_vacation(
+            start_date=date(2026, 5, 1),
+            end_date=date(2026, 5, 20),
+            status=int(VacationStatuses.pending),
+        )
+        self._add_vacation(
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 10),
+            status=int(VacationStatuses.approved),
+        )
+
+        may_overlap = overlab_check(self.employee.id, date(2026, 5, 1), date(2026, 5, 10), self.db)
+        june_overlap = overlab_check(self.employee.id, date(2026, 6, 3), date(2026, 6, 5), self.db)
+
+        self.assertEqual(len(may_overlap), 1)
+        self.assertEqual(len(june_overlap), 1)
 
 
 if __name__ == "__main__":
