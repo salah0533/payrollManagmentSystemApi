@@ -88,7 +88,10 @@ def add_attendence(
         db: Session = Depends(get_db),
         current_user: User = Depends(require_permissions("attendance.correct")),
 ):
-        raise BadRequestException("Legacy attendance write endpoints are disabled. Use AttendanceDay events or correction endpoints.")
+        raise BadRequestException(
+                "Legacy attendance write endpoints are disabled. Use AttendanceDay events or correction endpoints.",
+                message_key="errors.legacy_attendance_write_disabled",
+        )
 
 @router.put("/mark_all_present")
 def mark_all_present(
@@ -105,7 +108,10 @@ def delete_att(
         db: Session = Depends(get_db),
         current_user: User = Depends(require_permissions("attendance.correct")),
 ):
-        raise BadRequestException("Legacy attendance delete endpoints are disabled. Use /attendance/day/{employee_id}/{work_date}.")
+        raise BadRequestException(
+                "Legacy attendance delete endpoints are disabled. Use /attendance/day/{employee_id}/{work_date}.",
+                message_key="errors.legacy_attendance_delete_disabled",
+        )
 
 
 @router.delete("/day/{employee_id}/{work_date}")

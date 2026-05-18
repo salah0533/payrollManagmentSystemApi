@@ -15,11 +15,11 @@ from app.services.user_service import get_user_by_identifier, get_user_or_404, s
 def authenticate_user(identifier: str, password: str, db: Session) -> User:
     user = get_user_by_identifier(identifier, db)
     if not user:
-        raise UnauthorizedException("Username or email was not found")
+        raise UnauthorizedException("Username or email was not found", message_key="auth.username_or_email_not_found")
     if not user.is_active:
-        raise ForbiddenException("Inactive users cannot log in")
+        raise ForbiddenException("Inactive users cannot log in", message_key="auth.inactive_login")
     if not verify_password(password, user.password_hash):
-        raise UnauthorizedException("Password is incorrect")
+        raise UnauthorizedException("Password is incorrect", message_key="auth.password_incorrect")
     return user
 
 
@@ -52,21 +52,21 @@ def refresh_access_token(refresh_token: str, db: Session) -> TokenResponse:
     try:
         payload = decode_token(refresh_token)
     except ValueError as exc:
-        raise UnauthorizedException("Invalid refresh token") from exc
+        raise UnauthorizedException("Invalid refresh token", message_key="auth.invalid_refresh_token") from exc
     if payload.get("token_type") != "refresh":
-        raise UnauthorizedException("Invalid refresh token")
+        raise UnauthorizedException("Invalid refresh token", message_key="auth.invalid_refresh_token")
     user_id = payload.get("user_id")
     if not user_id:
-        raise UnauthorizedException("Invalid refresh token")
+        raise UnauthorizedException("Invalid refresh token", message_key="auth.invalid_refresh_token")
     user = get_user_or_404(int(user_id), db)
     if not user.is_active:
-        raise ForbiddenException("Inactive users cannot refresh tokens")
+        raise ForbiddenException("Inactive users cannot refresh tokens", message_key="auth.inactive_refresh")
     return build_token_response(user)
 
 
 def change_password(current_user: User, payload: ChangePasswordRequest, db: Session) -> None:
     if not verify_password(payload.current_password, current_user.password_hash):
-        raise BadRequestException("Current password is incorrect")
+        raise BadRequestException("Current password is incorrect", message_key="auth.current_password_incorrect")
     current_user.password_hash = get_password_hash(payload.new_password)
     current_user.must_change_password = False
     db.add(current_user)
@@ -83,6 +83,10 @@ def change_password(current_user: User, payload: ChangePasswordRequest, db: Sess
         notification_type="password_changed",
         title="Password changed",
         message="Your password was changed successfully.",
+        title_key="notifications.password_changed_title",
+        message_key="notifications.password_changed_message",
+        translation_params={},
+        is_system_content=True,
         entity_type="user",
         entity_id=current_user.id,
         actor_user_id=current_user.id,

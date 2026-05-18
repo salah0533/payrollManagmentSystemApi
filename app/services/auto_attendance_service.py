@@ -124,6 +124,7 @@ def enforce_self_service_auto_attendance_policy(employee_id: int, db: Session) -
         raise ForbiddenException(
             "Auto attendance is enabled for this employee. Self-service attendance actions are disabled.",
             code="auto_attendance_enabled",
+            message_key="errors.auto_attendance_enabled",
         )
 
 

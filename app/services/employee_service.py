@@ -193,7 +193,7 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
 
     if payload.create_user_account:
         if actor is None or "admin" not in set(actor.active_role_codes):
-            raise ForbiddenException("Only admins can create linked user accounts")
+            raise ForbiddenException("Only admins can create linked user accounts", message_key="errors.forbidden")
         create_user(
             UserCreateRequest(
                 username=payload.username or "",
@@ -258,6 +258,7 @@ def delete_employee(id: int, db: Session, *, actor: User | None = None) -> None:
         raise ResourceConflictException(
             "Employee has a linked user account. Disable or unlink the account before deleting the employee.",
             code="employee_has_linked_user_account",
+            message_key="errors.employee_already_linked",
         )
 
     old_data = serialize_model(employee)

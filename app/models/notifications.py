@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.security import utc_now
@@ -15,6 +15,10 @@ class Notification(Base):
     notification_type = Column(String(100), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     message = Column(Text, nullable=False)
+    title_translation_key = Column(String(255), nullable=True)
+    message_translation_key = Column(String(255), nullable=True)
+    translation_params_json = Column(JSON, nullable=True)
+    is_system_content = Column(Boolean, nullable=False, default=False)
     entity_type = Column(String(100), nullable=True)
     entity_id = Column(Integer, nullable=True)
     actor_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.localization import translate
 from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user, require_authenticated_user
@@ -45,10 +46,10 @@ def auth_change_password(
     db: Session = Depends(get_db),
 ):
     change_password(current_user, payload, db)
-    return api_success(message="Password changed successfully")
+    return api_success(message_key="auth.password_changed")
 
 
 @router.post("/logout")
 def auth_logout(current_user: User = Depends(get_current_user)):
-    response = LogoutResponse(message="Logout is stateless; discard the access and refresh tokens on the client.")
+    response = LogoutResponse(message=translate("auth.logout_message"))
     return api_success(response)

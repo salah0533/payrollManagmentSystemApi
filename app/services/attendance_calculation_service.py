@@ -90,7 +90,7 @@ def _get_employee(employee_id: int, db: Session) -> Employees:
     if not employee:
         raise ResourceNotFoundException("Employee")
     if not employee.is_active:
-        raise BadRequestException("Inactive employees cannot create attendance")
+        raise BadRequestException("Inactive employees cannot create attendance", message_key="errors.inactive_employee_attendance")
     return employee
 
 
@@ -142,6 +142,10 @@ def _maybe_notify_attendance_issue(
             notification_type=notification_type,
             title=title,
             message=message,
+            title_key=f"notifications.{notification_type}_title",
+            message_key=f"notifications.{notification_type}_message",
+            translation_params={"work_date": work_date},
+            is_system_content=True,
             entity_type="attendance_day",
             entity_id=day.id,
             priority="normal",
@@ -161,6 +165,10 @@ def _maybe_notify_attendance_issue(
             notification_type="attendance_late",
             title="Late attendance",
             message=f"Your check-in on {work_date} was marked as late.",
+            title_key="notifications.attendance_late_title",
+            message_key="notifications.attendance_late_message",
+            translation_params={"work_date": work_date},
+            is_system_content=True,
             entity_type="attendance_day",
             entity_id=day.id,
             priority="normal",
@@ -208,7 +216,11 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
     vacation = _get_vacation(employee_id, work_date, db)
 
     if vacation:
-        raise ForbiddenException("Employee is on approved vacation", code="employee_on_approved_vacation")
+        raise ForbiddenException(
+            "Employee is on approved vacation",
+            code="employee_on_approved_vacation",
+            message_key="errors.employee_on_approved_vacation",
+        )
 
     schedule_timezone = get_schedule_timezone(schedule)
     day_start, day_end = _day_bounds(work_date, schedule_timezone)
@@ -224,29 +236,29 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
 
     by_type = {item.event_type for item in existing_events}
     if event_type == "check_in" and "check_in" in by_type:
-        raise BadRequestException("Duplicate check-in is not allowed")
+        raise BadRequestException("Duplicate check-in is not allowed", message_key="errors.duplicate_check_in")
     if event_type == "break_start" and "break_start" in by_type:
-        raise BadRequestException("Duplicate break_start is not allowed")
+        raise BadRequestException("Duplicate break_start is not allowed", message_key="errors.duplicate_break_start")
     if event_type == "break_start" and "check_in" not in by_type:
-        raise BadRequestException("Cannot start break before check-in")
+        raise BadRequestException("Cannot start break before check-in", message_key="errors.cannot_break_before_check_in")
     if event_type == "break_end" and "break_end" in by_type:
-        raise BadRequestException("Duplicate break_end is not allowed")
+        raise BadRequestException("Duplicate break_end is not allowed", message_key="errors.duplicate_break_end")
     if event_type == "break_end" and "break_start" not in by_type:
-        raise BadRequestException("Cannot end break before break_start")
+        raise BadRequestException("Cannot end break before break_start", message_key="errors.cannot_end_break_before_start")
     if event_type == "break_end":
         break_start_event = next((item for item in existing_events if item.event_type == "break_start"), None)
         break_start_time = _normalize_event_time(break_start_event.event_time) if break_start_event else None
         if break_start_time and event_time <= break_start_time:
-            raise BadRequestException("break_end cannot be before break_start")
+            raise BadRequestException("break_end cannot be before break_start", message_key="errors.break_end_before_break_start")
     if event_type == "check_out" and "check_in" not in by_type:
-        raise BadRequestException("Cannot check out before check-in")
+        raise BadRequestException("Cannot check out before check-in", message_key="errors.cannot_check_out_before_check_in")
     if event_type == "check_out" and "check_out" in by_type:
-        raise BadRequestException("Duplicate check_out is not allowed")
+        raise BadRequestException("Duplicate check_out is not allowed", message_key="errors.duplicate_check_out")
     if event_type == "check_out":
         check_in_event = next((item for item in existing_events if item.event_type == "check_in"), None)
         check_in_time = _normalize_event_time(check_in_event.event_time) if check_in_event else None
         if check_in_time and event_time <= check_in_time:
-            raise BadRequestException("check_out cannot be before check_in")
+            raise BadRequestException("check_out cannot be before check_in", message_key="errors.check_out_before_check_in")
 
     warning = None
     if WEEKDAY_NAMES[work_date.weekday()] in {day.lower() for day in (schedule.weekly_off_days or [])}:
@@ -266,7 +278,7 @@ def create_attendance_event(
 ):
     event_time = _normalize_event_time(event_time)
     if event_type not in ATTENDANCE_EVENT_FIELD_MAP and event_type != "manual_event":
-        raise BadRequestException("Invalid attendance event type")
+        raise BadRequestException("Invalid attendance event type", message_key="errors.invalid_attendance_event_type")
 
     validation = validate_attendance_event(employee_id, event_type, event_time, db)
     event = AttendanceEvent(
@@ -570,7 +582,7 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
 def recalculate_attendance_for_employee(employee_id: int, start_date: date, end_date: date, db: Session) -> list[AttendanceDay]:
     _get_employee(employee_id, db)
     if start_date > end_date:
-        raise BadRequestException("start_date must be before end_date")
+        raise BadRequestException("start_date must be before end_date", message_key="errors.start_before_end")
 
     current = start_date
     days: list[AttendanceDay] = []
@@ -738,7 +750,7 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
     if target_status == "weekly_off":
         weekly_off = WEEKDAY_NAMES[work_date.weekday()] in {item.lower() for item in (schedule.weekly_off_days or [])}
         if not weekly_off:
-            raise BadRequestException("This date is not a weekly off day in the assigned work schedule")
+            raise BadRequestException("This date is not a weekly off day in the assigned work schedule", message_key="errors.weekly_off_only")
         return {
             "check_in_time": None,
             "break_start_time": None,
@@ -746,7 +758,7 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
             "check_out_time": None,
             "status": "weekly_off",
         }
-    raise BadRequestException("Unsupported smart attendance target status")
+    raise BadRequestException("Unsupported smart attendance target status", message_key="errors.unsupported_smart_target_status")
 
 
 def apply_smart_attendance_status_correction(employee_id: int, work_date: date, target_status: str, corrected_by: int | None, reason: str, options: dict | None, db: Session):
@@ -861,7 +873,7 @@ def _validate_attendance_correction(day: AttendanceDay, payload) -> None:
         return
     updates = _requested_time_updates(payload)
     if not updates:
-        raise BadRequestException("Provide at least one attendance time field to correct")
+        raise BadRequestException("Provide at least one attendance time field to correct", message_key="errors.attendance_correction_missing_fields")
 
     merged_times = {field_name: getattr(day, field_name) for field_name in MANUAL_TIME_FIELDS}
     for field_name, field_value in updates.items():
@@ -873,24 +885,24 @@ def _validate_attendance_correction(day: AttendanceDay, payload) -> None:
     check_out_time = merged_times["check_out_time"]
 
     if break_start_time and not check_in_time:
-        raise BadRequestException("Set check-in before setting break start")
+        raise BadRequestException("Set check-in before setting break start", message_key="errors.set_check_in_first_break_start")
     if break_end_time and not break_start_time:
-        raise BadRequestException("Set break start before setting break end")
+        raise BadRequestException("Set break start before setting break end", message_key="errors.set_break_start_first_break_end")
     if check_out_time and not check_in_time:
-        raise BadRequestException("Set check-in before setting check-out")
+        raise BadRequestException("Set check-in before setting check-out", message_key="errors.set_check_in_first_check_out")
     if check_out_time and break_start_time and not break_end_time:
-        raise BadRequestException("Set break end before setting check-out")
+        raise BadRequestException("Set break end before setting check-out", message_key="errors.set_break_end_first_check_out")
 
     if check_in_time and break_start_time and check_in_time >= break_start_time:
-        raise BadRequestException("Check-in must be before break start")
+        raise BadRequestException("Check-in must be before break start", message_key="errors.check_in_before_break_start")
     if check_in_time and check_out_time and check_in_time >= check_out_time:
-        raise BadRequestException("Check-in must be before check-out")
+        raise BadRequestException("Check-in must be before check-out", message_key="errors.check_in_before_check_out")
     if break_start_time and break_end_time and break_start_time >= break_end_time:
-        raise BadRequestException("Break start must be before break end")
+        raise BadRequestException("Break start must be before break end", message_key="errors.break_start_before_break_end")
     if break_start_time and check_out_time and break_start_time >= check_out_time:
-        raise BadRequestException("Break start must be before check-out")
+        raise BadRequestException("Break start must be before check-out", message_key="errors.break_start_before_check_out")
     if break_end_time and check_out_time and break_end_time >= check_out_time:
-        raise BadRequestException("Break end must be before check-out")
+        raise BadRequestException("Break end must be before check-out", message_key="errors.break_end_before_check_out")
 
 
 def delete_attendance_day(employee_id: int, work_date: date, db: Session, deleted_by: int | None = None) -> dict[str, int]:

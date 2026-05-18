@@ -17,7 +17,7 @@ def update_settings(set:SettingsBaseModel,db:Session):
     setting = db.scalar(select(Settings))
 
     if not setting:
-        raise BadRequestException("Settings row does not exist", code="settings_not_initialized")
+        raise BadRequestException("Settings row does not exist", code="settings_not_initialized", message_key="errors.settings_not_initialized")
     setting.entry_time = set.entryTime if set.entryTime else setting.entry_time
     setting.exit_time = set.exitTime if set.exitTime else setting.exit_time
     db.commit()

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.localization import DEFAULT_LANGUAGE, get_current_language, translate
 from app.exceptions.base_exception import BadRequestException, ResourceNotFoundException
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
 from app.models.notifications import Notification, NotificationRecipient
@@ -23,9 +24,27 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def ensure_notification_localization_schema(db: Session) -> None:
+    inspector = inspect(db.connection())
+    if not inspector.has_table("notifications"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("notifications")}
+    if "title_translation_key" not in existing_columns:
+        db.execute(text("ALTER TABLE notifications ADD COLUMN title_translation_key VARCHAR(255)"))
+    if "message_translation_key" not in existing_columns:
+        db.execute(text("ALTER TABLE notifications ADD COLUMN message_translation_key VARCHAR(255)"))
+    if "translation_params_json" not in existing_columns:
+        db.execute(text("ALTER TABLE notifications ADD COLUMN translation_params_json JSON"))
+    if "is_system_content" not in existing_columns:
+        db.execute(text("ALTER TABLE notifications ADD COLUMN is_system_content BOOLEAN NOT NULL DEFAULT 0"))
+    db.flush()
+
+
 class NotificationService:
     def __init__(self, db: Session):
         self.db = db
+        ensure_notification_localization_schema(db)
 
     def notify_user(
         self,
@@ -34,6 +53,10 @@ class NotificationService:
         notification_type: str,
         title: str,
         message: str,
+        title_key: str | None = None,
+        message_key: str | None = None,
+        translation_params: dict | None = None,
+        is_system_content: bool | None = None,
         entity_type: str | None = None,
         entity_id: int | None = None,
         actor_user_id: int | None = None,
@@ -46,6 +69,10 @@ class NotificationService:
             notification_type=notification_type,
             title=title,
             message=message,
+            title_key=title_key,
+            message_key=message_key,
+            translation_params=translation_params,
+            is_system_content=is_system_content,
             entity_type=entity_type,
             entity_id=entity_id,
             actor_user_id=actor_user_id,
@@ -61,6 +88,10 @@ class NotificationService:
         notification_type: str,
         title: str,
         message: str,
+        title_key: str | None = None,
+        message_key: str | None = None,
+        translation_params: dict | None = None,
+        is_system_content: bool | None = None,
         entity_type: str | None = None,
         entity_id: int | None = None,
         actor_user_id: int | None = None,
@@ -72,12 +103,31 @@ class NotificationService:
         if not recipient_ids:
             if skip_if_no_recipients:
                 return None
-            raise BadRequestException("No active notification recipients were found")
+            raise BadRequestException(
+                "No active notification recipients were found",
+                message_key="errors.no_active_notification_recipients",
+            )
+
+        translation_params = translation_params or {}
+        resolved_title = title or (
+            translate(title_key, translation_params, language=DEFAULT_LANGUAGE, fallback="")
+            if title_key
+            else ""
+        )
+        resolved_message = message or (
+            translate(message_key, translation_params, language=DEFAULT_LANGUAGE, fallback="")
+            if message_key
+            else ""
+        )
 
         notification = Notification(
             notification_type=notification_type,
-            title=title,
-            message=message,
+            title=resolved_title,
+            message=resolved_message,
+            title_translation_key=title_key,
+            message_translation_key=message_key,
+            translation_params_json=translation_params or None,
+            is_system_content=bool(is_system_content if is_system_content is not None else title_key or message_key),
             entity_type=entity_type,
             entity_id=entity_id,
             actor_user_id=actor_user_id,
@@ -100,6 +150,10 @@ class NotificationService:
         notification_type: str,
         title: str,
         message: str,
+        title_key: str | None = None,
+        message_key: str | None = None,
+        translation_params: dict | None = None,
+        is_system_content: bool | None = None,
         entity_type: str | None = None,
         entity_id: int | None = None,
         actor_user_id: int | None = None,
@@ -109,7 +163,7 @@ class NotificationService:
     ) -> Notification | None:
         role_codes = [code.strip().lower() for code in role_codes if code and code.strip()]
         if not role_codes:
-            raise BadRequestException("At least one role code is required")
+            raise BadRequestException("At least one role code is required", message_key="errors.role_code_required")
 
         user_ids = self.db.scalars(
             select(User.id)
@@ -126,6 +180,10 @@ class NotificationService:
             notification_type=notification_type,
             title=title,
             message=message,
+            title_key=title_key,
+            message_key=message_key,
+            translation_params=translation_params,
+            is_system_content=is_system_content,
             entity_type=entity_type,
             entity_id=entity_id,
             actor_user_id=actor_user_id,
@@ -388,12 +446,13 @@ class NotificationService:
 
     def _serialize_user_notification(self, recipient: NotificationRecipient) -> UserNotificationRead:
         notification = recipient.notification
+        title, message = self._resolve_content(notification)
         return UserNotificationRead(
             notification_id=notification.id,
             recipient_id=recipient.id,
             notification_type=notification.notification_type,
-            title=notification.title,
-            message=notification.message,
+            title=title,
+            message=message,
             entity_type=notification.entity_type,
             entity_id=notification.entity_id,
             actor_user_id=notification.actor_user_id,
@@ -411,11 +470,12 @@ class NotificationService:
         recipient_count = len(notification.recipients)
         read_count = sum(1 for recipient in notification.recipients if recipient.is_read)
         archived_count = sum(1 for recipient in notification.recipients if recipient.is_archived)
+        title, message = self._resolve_content(notification)
         return NotificationAdminRead(
             id=notification.id,
             notification_type=notification.notification_type,
-            title=notification.title,
-            message=notification.message,
+            title=title,
+            message=message,
             entity_type=notification.entity_type,
             entity_id=notification.entity_id,
             actor_user_id=notification.actor_user_id,
@@ -426,3 +486,15 @@ class NotificationService:
             read_count=read_count,
             archived_count=archived_count,
         )
+
+    def _resolve_content(self, notification: Notification) -> tuple[str, str]:
+        params = notification.translation_params_json or {}
+        language = get_current_language()
+        title = notification.title
+        message = notification.message
+
+        if notification.is_system_content and notification.title_translation_key:
+            title = translate(notification.title_translation_key, params, language=language, fallback=notification.title)
+        if notification.is_system_content and notification.message_translation_key:
+            message = translate(notification.message_translation_key, params, language=language, fallback=notification.message)
+        return title, message

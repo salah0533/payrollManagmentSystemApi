@@ -22,6 +22,15 @@ def _vacation_title(status_code: str) -> str:
     }[status_code]
 
 
+def _vacation_title_key(status_code: str) -> str:
+    return {
+        "vacation_request_submitted": "notifications.vacation_request_submitted_title",
+        "vacation_approved": "notifications.vacation_approved_title",
+        "vacation_rejected": "notifications.vacation_rejected_title",
+        "vacation_cancelled": "notifications.vacation_cancelled_title",
+    }[status_code]
+
+
 def _vacation_message(vacation: Vacation, employee_name: str, status_code: str) -> str:
     period = f"{vacation.start_date.isoformat()} to {vacation.end_date.isoformat()}"
     if status_code == "vacation_request_submitted":
@@ -31,6 +40,15 @@ def _vacation_message(vacation: Vacation, employee_name: str, status_code: str) 
     if status_code == "vacation_rejected":
         return f"Your vacation request for {period} was rejected."
     return f"Your vacation request for {period} was cancelled."
+
+
+def _vacation_message_key(status_code: str) -> str:
+    return {
+        "vacation_request_submitted": "notifications.vacation_request_submitted_message",
+        "vacation_approved": "notifications.vacation_approved_message",
+        "vacation_rejected": "notifications.vacation_rejected_message",
+        "vacation_cancelled": "notifications.vacation_cancelled_message",
+    }[status_code]
 
 
 def _get_employee_user_id(employee_id: int, db: Session) -> int | None:
@@ -44,6 +62,13 @@ def _notify_vacation_submission(vacation: Vacation, db: Session, actor: User | N
         notification_type="vacation_request_submitted",
         title=_vacation_title("vacation_request_submitted"),
         message=_vacation_message(vacation, employee_name, "vacation_request_submitted"),
+        title_key=_vacation_title_key("vacation_request_submitted"),
+        message_key=_vacation_message_key("vacation_request_submitted"),
+        translation_params={
+            "employee_name": employee_name,
+            "period": f"{vacation.start_date.isoformat()} to {vacation.end_date.isoformat()}",
+        },
+        is_system_content=True,
         entity_type="vacation",
         entity_id=vacation.id,
         actor_user_id=actor.id if actor else None,
@@ -80,6 +105,13 @@ def _notify_vacation_status_change(vacation: Vacation, db: Session, actor: User 
         notification_type=notification_type,
         title=_vacation_title(notification_type),
         message=_vacation_message(vacation, employee_name, notification_type),
+        title_key=_vacation_title_key(notification_type),
+        message_key=_vacation_message_key(notification_type),
+        translation_params={
+            "employee_name": employee_name,
+            "period": f"{vacation.start_date.isoformat()} to {vacation.end_date.isoformat()}",
+        },
+        is_system_content=True,
         entity_type="vacation",
         entity_id=vacation.id,
         actor_user_id=actor.id if actor else None,

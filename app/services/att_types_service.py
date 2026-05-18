@@ -1,8 +1,14 @@
+from app.core.localization import translate
 from app.utility.reference_codes import ATTENDANCE_STATUS_CODES
 
 
 def get_att_types_srv(db):
     return [
-        {"id": index, "code": code, "attendence_type": code}
+        {
+            "id": index,
+            "code": code,
+            "label": translate(f"labels.attendance_status.{code}", fallback=code),
+            "attendence_type": code,
+        }
         for index, code in enumerate(ATTENDANCE_STATUS_CODES)
     ]

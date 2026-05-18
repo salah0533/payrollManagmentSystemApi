@@ -101,7 +101,7 @@ def _ensure_unique_username(username: str, db: Session, *, exclude_user_id: int 
     if exclude_user_id is not None:
         statement = statement.where(User.id != exclude_user_id)
     if db.scalar(statement):
-        raise ResourceConflictException("Username already exists", code="username_already_exists")
+        raise ResourceConflictException("Username already exists", code="username_already_exists", message_key="errors.username_exists")
 
 
 def _ensure_unique_email(email: str | None, db: Session, *, exclude_user_id: int | None = None) -> None:
@@ -111,7 +111,7 @@ def _ensure_unique_email(email: str | None, db: Session, *, exclude_user_id: int
     if exclude_user_id is not None:
         statement = statement.where(User.id != exclude_user_id)
     if db.scalar(statement):
-        raise ResourceConflictException("Email already exists", code="email_already_exists")
+        raise ResourceConflictException("Email already exists", code="email_already_exists", message_key="errors.email_exists")
 
 
 def _ensure_employee_link_available(employee_id: int | None, db: Session, *, exclude_user_id: int | None = None) -> None:
@@ -128,6 +128,7 @@ def _ensure_employee_link_available(employee_id: int | None, db: Session, *, exc
         raise ResourceConflictException(
             "This employee already has an active user account",
             code="employee_already_linked",
+            message_key="errors.employee_already_linked",
         )
 
 
@@ -272,7 +273,7 @@ def list_employees_without_accounts(db: Session, *, include_user_id: int | None 
 def _get_role_assignments(role_ids: list[int], db: Session) -> list[Role]:
     roles = [get_role_or_404(role_id, db) for role_id in role_ids]
     if not roles:
-        raise BadRequestException("At least one role is required")
+        raise BadRequestException("At least one role is required", message_key="errors.at_least_one_role_required")
     return roles
 
 
@@ -281,6 +282,7 @@ def _validate_employee_role_policy(employee_id: int | None, roles: list[Role]) -
         raise BadRequestException(
             "employee role requires the user to be linked to an employee profile",
             code="employee_role_requires_profile",
+            message_key="errors.employee_role_requires_profile",
         )
 
 
@@ -324,6 +326,10 @@ def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None =
         notification_type="account_created",
         title="Account created",
         message="Your employee management account is ready to use.",
+        title_key="notifications.account_created_title",
+        message_key="notifications.account_created_message",
+        translation_params={},
+        is_system_content=True,
         entity_type="user",
         entity_id=user.id,
         actor_user_id=actor.id if actor else None,
@@ -335,6 +341,10 @@ def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None =
             notification_type="must_change_password",
             title="Password change required",
             message="You must change your password before accessing the rest of the app.",
+            title_key="notifications.must_change_password_title",
+            message_key="notifications.must_change_password_message",
+            translation_params={},
+            is_system_content=True,
             entity_type="user",
             entity_id=user.id,
             actor_user_id=actor.id if actor else None,
@@ -388,6 +398,10 @@ def update_user(user_id: int, payload: UserUpdateRequest, db: Session, *, actor:
             notification_type="must_change_password",
             title="Password change required",
             message="An administrator requires you to change your password before continuing.",
+            title_key="notifications.must_change_password_title",
+            message_key="notifications.admin_forced_password_change_message",
+            translation_params={},
+            is_system_content=True,
             entity_type="user",
             entity_id=user.id,
             actor_user_id=actor.id if actor else None,
@@ -418,7 +432,11 @@ def _ensure_not_last_active_admin(user: User, db: Session) -> None:
     if "admin" not in role_codes:
         return
     if user.is_active and _count_active_admins(db, exclude_user_id=user.id) == 0:
-        raise ResourceConflictException("Cannot deactivate the last active admin", code="last_active_admin")
+        raise ResourceConflictException(
+            "Cannot deactivate the last active admin",
+            code="last_active_admin",
+            message_key="errors.last_active_admin",
+        )
 
 
 def activate_user(user_id: int, db: Session, *, actor: User | None = None) -> UserRead:
@@ -475,7 +493,11 @@ def remove_role(user_id: int, role_id: int, db: Session, *, actor: User | None =
     role = mapping.role or get_role_or_404(role_id, db)
 
     if role.code == "admin" and user.is_active and _count_active_admins(db, exclude_user_id=user.id) == 0:
-        raise ResourceConflictException("Cannot remove the last active admin role", code="last_active_admin_role")
+        raise ResourceConflictException(
+            "Cannot remove the last active admin role",
+            code="last_active_admin_role",
+            message_key="errors.last_active_admin_role",
+        )
 
     remaining_roles = [item.role for item in user.user_roles if item.role_id != role_id and item.role is not None]
     _validate_employee_role_policy(user.employee_id, remaining_roles)
@@ -515,6 +537,10 @@ def reset_password(user_id: int, payload: UserResetPasswordRequest, db: Session,
             notification_type="must_change_password",
             title="Password reset",
             message="Your password was reset. You must change it at your next login.",
+            title_key="notifications.password_reset_title",
+            message_key="notifications.password_reset_with_change_message",
+            translation_params={},
+            is_system_content=True,
             entity_type="user",
             entity_id=user.id,
             actor_user_id=actor.id if actor else None,
@@ -526,6 +552,10 @@ def reset_password(user_id: int, payload: UserResetPasswordRequest, db: Session,
             notification_type="password_changed",
             title="Password reset",
             message="Your password was reset by an administrator.",
+            title_key="notifications.password_reset_title",
+            message_key="notifications.password_reset_without_change_message",
+            translation_params={},
+            is_system_content=True,
             entity_type="user",
             entity_id=user.id,
             actor_user_id=actor.id if actor else None,

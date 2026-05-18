@@ -7,6 +7,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.localization import set_current_language
 from app.core.security import decode_token
 from app.db.session import get_db
 from app.exceptions.base_exception import ForbiddenException, UnauthorizedException
@@ -32,7 +33,7 @@ def _load_user(user_id: int, db: Session) -> User | None:
 
 
 def _forbidden(detail: str) -> ForbiddenException:
-    return ForbiddenException(detail)
+    return ForbiddenException(detail, message_key="errors.forbidden")
 
 
 def _ensure_password_change_allowed(user: User, request: Request) -> None:
@@ -40,7 +41,10 @@ def _ensure_password_change_allowed(user: User, request: Request) -> None:
         return
     if request.url.path in PASSWORD_CHANGE_ALLOWED_PATHS:
         return
-    raise _forbidden("Password change required before accessing this resource")
+    raise ForbiddenException(
+        "Password change required before accessing this resource",
+        message_key="auth.password_change_required",
+    )
 
 
 def get_current_user(
@@ -50,6 +54,7 @@ def get_current_user(
 ) -> User:
     credentials_error = UnauthorizedException(
         "Could not validate credentials",
+        message_key="auth.credentials_invalid",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
@@ -68,8 +73,9 @@ def get_current_user(
     if not user:
         raise credentials_error
     if not user.is_active:
-        raise _forbidden("Inactive users cannot access this resource")
+        raise ForbiddenException("Inactive users cannot access this resource", message_key="auth.inactive_access")
 
+    set_current_language(user.language)
     request.state.current_user = user
     return user
 
@@ -92,7 +98,7 @@ def require_roles(*role_codes: str) -> Callable:
         if "admin" in user_roles:
             return current_user
         if not user_roles.intersection(role_codes):
-            raise _forbidden("You do not have the required role")
+            raise ForbiddenException("You do not have the required role", message_key="errors.missing_role")
         return current_user
 
     return dependency
@@ -110,7 +116,11 @@ def require_permissions(*permission_codes: str) -> Callable:
         permissions = set(current_user.active_permission_codes)
         missing = [code for code in permission_codes if code not in permissions]
         if missing:
-            raise _forbidden(f"Missing required permission(s): {', '.join(missing)}")
+            raise ForbiddenException(
+                f"Missing required permission(s): {', '.join(missing)}",
+                message_key="errors.notification_send_permission_missing",
+                message_params={"permissions": ", ".join(missing)},
+            )
         return current_user
 
     return dependency
@@ -141,7 +151,10 @@ def require_self_or_permission(permission_code: str, *, employee_param: str = "e
             return current_user
         route_value = request.path_params.get(employee_param)
         if route_value is None or current_user.employee_id is None or int(route_value) != int(current_user.employee_id):
-            raise _forbidden("You are not allowed to access another employee's data")
+            raise ForbiddenException(
+                "You are not allowed to access another employee's data",
+                message_key="errors.access_other_employee_forbidden",
+            )
         return current_user
 
     return dependency

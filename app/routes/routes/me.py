@@ -27,7 +27,7 @@ router = APIRouter()
 
 def _current_employee_id(current_user: User) -> int:
     if current_user.employee_id is None:
-        raise BadRequestException("This user is not linked to an employee profile")
+        raise BadRequestException("This user is not linked to an employee profile", message_key="errors.me_profile_missing")
     return current_user.employee_id
 
 
@@ -92,7 +92,7 @@ def request_my_vacation(
 ):
     employee_id = _current_employee_id(current_user)
     if overlab_check(employee_id, payload.start_date, payload.end_date, db):
-        raise ConflictException("Vacation already exists in the requested range", code="vacation_overlap")
+        raise ConflictException("Vacation already exists in the requested range", code="vacation_overlap", message_key="errors.vacation_overlap")
     add_vacation(
         VacationBaseModel(
             employee_id=employee_id,

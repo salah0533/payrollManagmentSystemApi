@@ -42,7 +42,7 @@ def add_vacation_by_id(
     current_user: User = Depends(require_hr_or_admin),
 ):
     if overlab_check(vac.employee_id,vac.start_date,vac.end_date,db) != []:
-        raise ConflictException("Vacation already exists in these dates", code="vacation_overlap")
+        raise ConflictException("Vacation already exists in these dates", code="vacation_overlap", message_key="errors.vacation_overlap")
     add_vacation(vac,db, actor=current_user)
     return api_success(status_code=201)
 

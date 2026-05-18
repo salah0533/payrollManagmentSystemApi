@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.core.localization import translate, translate_validation_message
 from app.exceptions.base_exception import AppException, DatabaseException, InternalServerException
 
 
@@ -46,7 +47,7 @@ def _format_validation_errors(errors: Iterable[dict[str, Any]]) -> list[dict[str
             {
                 "field": field,
                 "location": location,
-                "message": error.get("msg", "Invalid value"),
+                "message": translate_validation_message(error.get("msg", "Invalid value")),
                 "type": error.get("type", "validation_error"),
             }
         )
@@ -54,17 +55,24 @@ def _format_validation_errors(errors: Iterable[dict[str, Any]]) -> list[dict[str
 
 
 def _validation_message(errors: list[dict[str, str]]) -> str:
-    return "Validation failed"
+    return translate("errors.validation_failed", fallback="Validation failed")
 
 
 def _normalize_http_exception(http_exc: HTTPException) -> tuple[str, list[dict[str, Any]], str]:
     detail = http_exc.detail
     if isinstance(detail, str):
-        return detail, [], _error_code_from_status(http_exc.status_code)
+        return translate_validation_message(detail), [], _error_code_from_status(http_exc.status_code)
     if isinstance(detail, list):
-        return "Validation failed", _format_validation_errors(detail), "validation_error"
+        return translate("errors.validation_failed", fallback="Validation failed"), _format_validation_errors(detail), "validation_error"
     if isinstance(detail, dict):
-        message = str(detail.get("message") or detail.get("detail") or _status_phrase(http_exc.status_code))
+        if detail.get("message_key"):
+            message = translate(
+                str(detail["message_key"]),
+                detail.get("message_params"),
+                fallback=str(detail.get("message") or detail.get("detail") or _status_phrase(http_exc.status_code)),
+            )
+        else:
+            message = str(detail.get("message") or detail.get("detail") or _status_phrase(http_exc.status_code))
         errors = detail.get("errors")
         if not isinstance(errors, list):
             errors = []
@@ -106,15 +114,15 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(IntegrityError)
     async def handle_integrity_error(request: Request, exc: IntegrityError) -> JSONResponse:
-        message = "Database constraint violation"
+        message = translate("errors.integrity_generic", fallback="Database constraint violation")
         error_code = "integrity_error"
         raw_message = str(getattr(exc, "orig", exc)).lower()
 
         if "unique" in raw_message or "duplicate" in raw_message:
-            message = "A record with the same unique value already exists"
+            message = translate("errors.integrity_duplicate", fallback="A record with the same unique value already exists")
             error_code = "duplicate_resource"
         elif "foreign key" in raw_message:
-            message = "The request references a related record that does not exist"
+            message = translate("errors.integrity_reference", fallback="The request references a related record that does not exist")
             error_code = "invalid_reference"
 
         logger.exception("%s %s -> integrity error", request.method, request.url.path)
@@ -124,11 +132,14 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(SQLAlchemyError)
     async def handle_sqlalchemy_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:
         logger.exception("%s %s -> database error", request.method, request.url.path)
-        payload = DatabaseException().to_response()
+        payload = DatabaseException(message_key="errors.database_error").to_response()
         return _json_response(payload, status_code=500)
 
     @app.exception_handler(Exception)
     async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("%s %s -> unexpected server error", request.method, request.url.path)
-        payload = InternalServerException("An unexpected server error occurred").to_response()
+        payload = InternalServerException(
+            "An unexpected server error occurred",
+            message_key="errors.internal_server_error",
+        ).to_response()
         return _json_response(payload, status_code=500)

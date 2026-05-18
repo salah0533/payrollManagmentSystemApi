@@ -224,10 +224,14 @@ def _notify_payroll_backoffice_status(payroll: EmployeePayroll, db: Session) -> 
         notification_type = "payroll_needs_review"
         title = "Payroll needs review"
         message = f"Payroll for employee #{payroll.employee_id} in period #{payroll.payroll_period_id} needs review."
+        title_key = "notifications.payroll_needs_review_title"
+        message_key = "notifications.payroll_needs_review_message"
     elif payroll.status == "draft":
         notification_type = "payroll_draft_ready"
         title = "Payroll draft ready"
         message = f"Payroll draft for employee #{payroll.employee_id} in period #{payroll.payroll_period_id} is ready."
+        title_key = "notifications.payroll_draft_ready_title"
+        message_key = "notifications.payroll_draft_ready_message"
     else:
         return
 
@@ -242,6 +246,13 @@ def _notify_payroll_backoffice_status(payroll: EmployeePayroll, db: Session) -> 
         notification_type=notification_type,
         title=title,
         message=message,
+        title_key=title_key,
+        message_key=message_key,
+        translation_params={
+            "employee_name": f"Employee #{payroll.employee_id}",
+            "period_id": payroll.payroll_period_id,
+        },
+        is_system_content=True,
         entity_type="employee_payroll",
         entity_id=payroll.id,
         priority="normal",
@@ -255,6 +266,9 @@ def _notify_employee_payroll_status(
     notification_type: str,
     title: str,
     message: str,
+    title_key: str | None,
+    message_key: str | None,
+    translation_params: dict | None,
     actor_user_id: int | None,
     db: Session,
 ) -> None:
@@ -274,6 +288,10 @@ def _notify_employee_payroll_status(
         notification_type=notification_type,
         title=title,
         message=message,
+        title_key=title_key,
+        message_key=message_key,
+        translation_params=translation_params,
+        is_system_content=bool(title_key or message_key),
         entity_type="employee_payroll",
         entity_id=payroll.id,
         actor_user_id=actor_user_id,
@@ -753,6 +771,10 @@ def _upsert_discrepancy(
             notification_type="payroll_discrepancy_detected",
             title="Payroll discrepancy detected",
             message=description,
+            title_key="notifications.payroll_discrepancy_detected_title",
+            message_key="notifications.payroll_discrepancy_detected_message",
+            translation_params={"description": description},
+            is_system_content=True,
             entity_type="payroll_discrepancy",
             entity_id=discrepancy.id,
             priority="high",
@@ -898,7 +920,7 @@ def calculate_employee_payroll(
 
     payroll = _get_employee_payroll(employee_id, payroll_period_id, db)
     if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
-        raise BadRequestException("Approved or paid payroll cannot be recalculated")
+        raise BadRequestException("Approved or paid payroll cannot be recalculated", message_key="errors.approved_or_paid_payroll_recalc")
 
     old_gross_salary = _decimal(payroll.gross_salary)
     old_net_salary = _decimal(payroll.net_salary)
@@ -976,7 +998,7 @@ def recalculate_payroll_period(payroll_period_id: int, db: Session, created_by: 
     if not period:
         raise ResourceNotFoundException("Payroll period")
     if period.status in FINAL_PAYROLL_STATUSES:
-        raise BadRequestException("Approved or paid payroll period cannot be recalculated")
+        raise BadRequestException("Approved or paid payroll period cannot be recalculated", message_key="errors.approved_or_paid_payroll_recalc")
 
     employees = db.scalars(select(Employees).where(Employees.is_active.is_(True))).all()
     payrolls: list[EmployeePayroll] = []
@@ -1252,7 +1274,7 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
 
     open_high = [item for item in payroll.discrepancies if item.status == "open" and item.severity == "high"]
     if open_high:
-        raise BadRequestException("Resolve high-severity discrepancies before approval")
+        raise BadRequestException("Resolve high-severity discrepancies before approval", message_key="errors.resolve_high_severity_first")
 
     old_status = payroll.status
     latest_snapshot = _latest_payroll_snapshot(payroll.id, db)
@@ -1292,6 +1314,9 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
         notification_type="payroll_approved",
         title="Payroll approved",
         message=f"Your payroll for period #{payroll.payroll_period_id} was approved.",
+        title_key="notifications.payroll_approved_title",
+        message_key="notifications.payroll_approved_message",
+        translation_params={"period_id": payroll.payroll_period_id},
         actor_user_id=approved_by,
         db=db,
     )
@@ -1322,11 +1347,11 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
 
     payment_amount = _money(_decimal(amount)) if amount is not None else payroll.balance_amount
     if payment_amount == Decimal("0.00"):
-        raise BadRequestException("Payment amount cannot be zero")
+        raise BadRequestException("Payment amount cannot be zero", message_key="errors.payment_amount_zero")
     if payment_amount < Decimal("0.00"):
-        raise BadRequestException("Payment amount cannot be negative")
+        raise BadRequestException("Payment amount cannot be negative", message_key="errors.payment_amount_negative")
     if payment_amount > payroll.balance_amount:
-        raise BadRequestException("Payment amount cannot exceed the remaining payroll balance")
+        raise BadRequestException("Payment amount cannot exceed the remaining payroll balance", message_key="errors.payment_amount_exceeds_balance")
 
     payroll.paid_amount = _money(payroll.paid_amount + payment_amount)
     _sync_payroll_balance(payroll)
@@ -1388,6 +1413,13 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
         notification_type="payroll_paid",
         title="Payroll payment recorded",
         message=f"A payroll payment of {payment_amount} was recorded for period #{payroll.payroll_period_id}. Remaining balance: {payroll.balance_amount}.",
+        title_key="notifications.payroll_paid_title",
+        message_key="notifications.payroll_paid_message",
+        translation_params={
+            "payment_amount": payment_amount,
+            "period_id": payroll.payroll_period_id,
+            "balance_amount": payroll.balance_amount,
+        },
         actor_user_id=paid_by,
         db=db,
     )
@@ -1485,7 +1517,7 @@ def _get_editable_payroll_for_adjustment(adjustment: PayrollAdjustment, db: Sess
         raise ResourceNotFoundException("Employee payroll")
     period = db.get(PayrollPeriod, payroll.payroll_period_id)
     if payroll.status in FINAL_PAYROLL_STATUSES or (period and period.status in FINAL_PAYROLL_STATUSES):
-        raise BadRequestException("Approved, paid, or locked payroll adjustments cannot be changed")
+        raise BadRequestException("Approved, paid, or locked payroll adjustments cannot be changed", message_key="errors.locked_adjustments_immutable")
     return payroll
 
 

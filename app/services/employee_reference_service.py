@@ -15,7 +15,11 @@ def _normalize_name(name: str) -> str:
 def _ensure_unique_name(model, name: str, db: Session) -> None:
     existing = db.scalar(select(model.id).where(func.lower(model.name) == name.lower()))
     if existing:
-        raise ConflictException(f"{model.__name__} already exists", code=f"{model.__tablename__}_already_exists")
+        raise ConflictException(
+            f"{model.__name__} already exists",
+            code=f"{model.__tablename__}_already_exists",
+            message_key="errors.conflict",
+        )
 
 
 def list_departments(db: Session) -> list[DepartmentRead]:
