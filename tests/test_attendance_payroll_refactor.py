@@ -28,6 +28,7 @@ from app.services.payroll_calculation_service import (
     create_payroll_history_snapshot,
     get_employee_payroll_by_period,
     get_or_create_payroll_period_for_date,
+    reconcile_existing_payrolls_for_settings_change,
 )
 from app.services.policy_service import get_employee_compensation, get_working_days, parse_holidays
 
@@ -359,6 +360,49 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
                 item.discrepancy_type == "missing_attendance"
                 and deleted_date.isoformat() in item.description
                 for item in open_discrepancies
+            )
+        )
+
+    def test_work_schedule_change_reconciles_missing_attendance_discrepancies(self):
+        target_date = date(2026, 5, 3)
+        self.db.add_all([day for day in self._month_days() if day.work_date != target_date])
+        self.db.commit()
+
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db)
+        self.db.commit()
+
+        open_before = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.status == "open",
+            )
+        ).all()
+        self.assertTrue(
+            any(
+                item.discrepancy_type == "missing_attendance"
+                and target_date.isoformat() in item.description
+                for item in open_before
+            )
+        )
+
+        schedule = self._schedule()
+        schedule.weekly_off_days = ["saturday", "sunday"]
+        self.db.add(schedule)
+        reconcile_existing_payrolls_for_settings_change(self.db, reason="work_schedule_updated")
+        self.db.commit()
+
+        open_after = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.status == "open",
+            )
+        ).all()
+        self.assertFalse(
+            any(
+                item.discrepancy_type == "missing_attendance"
+                and target_date.isoformat() in item.description
+                for item in open_after
             )
         )
 

@@ -997,6 +997,47 @@ def recalculate_payroll_period(payroll_period_id: int, db: Session, created_by: 
     return payrolls
 
 
+def reconcile_existing_payrolls_for_settings_change(
+    db: Session,
+    *,
+    reason: str = "settings_change",
+    created_by: int | None = None,
+) -> dict[str, int]:
+    payrolls = db.scalars(
+        select(EmployeePayroll)
+        .options(selectinload(EmployeePayroll.payroll_period))
+        .order_by(EmployeePayroll.payroll_period_id.asc(), EmployeePayroll.employee_id.asc(), EmployeePayroll.id.asc())
+    ).all()
+
+    summary = {
+        "recalculated": 0,
+        "reconciled": 0,
+        "skipped": 0,
+    }
+
+    for payroll in payrolls:
+        period = payroll.payroll_period
+        if not period or period.status == "cancelled":
+            summary["skipped"] += 1
+            continue
+
+        if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
+            detect_payroll_discrepancies(payroll.employee_id, payroll.payroll_period_id, db)
+            summary["reconciled"] += 1
+            continue
+
+        calculate_employee_payroll(
+            employee_id=payroll.employee_id,
+            payroll_period_id=payroll.payroll_period_id,
+            db=db,
+            reason=reason,
+            created_by=created_by,
+        )
+        summary["recalculated"] += 1
+
+    return summary
+
+
 def sync_payroll_with_attendance_context(employee_id: int, work_date: date, db: Session, trigger_reason: str = "attendance_change") -> dict[str, object]:
     period = get_or_create_payroll_period_for_date(work_date, db)
     payroll = _get_employee_payroll(employee_id, period.id, db)

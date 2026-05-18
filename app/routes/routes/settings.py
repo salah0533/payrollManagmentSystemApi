@@ -54,7 +54,18 @@ def put_work_schedule(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("settings.update")),
 ):
+    current_schedule = get_default_work_schedule(db)
+    impactful_fields = ("start_time", "end_time", "break_minutes", "weekly_off_days", "timezone", "is_default")
+    previous_values = {field: getattr(current_schedule, field) for field in impactful_fields}
     schedule = update_default_work_schedule(db, **payload.model_dump())
+    if any(previous_values[field] != getattr(schedule, field) for field in impactful_fields):
+        from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_settings_change
+
+        reconcile_existing_payrolls_for_settings_change(
+            db,
+            reason="work_schedule_updated",
+            created_by=current_user.id,
+        )
     db.commit()
     db.refresh(schedule)
     return api_success(schedule)
@@ -85,7 +96,29 @@ def put_payroll_policy(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("settings.update")),
 ):
+    current_policy = get_or_create_payroll_policy(db)
+    impactful_fields = (
+        "minimum_overtime_minutes",
+        "minimum_auto_pay_minutes",
+        "allowed_late_minutes",
+        "paid_vacation_counts_for_daily",
+        "overtime_enabled",
+        "late_makeup_enabled",
+        "late_deduction_enabled",
+        "auto_recalculate_draft_payroll",
+        "lock_payroll_after_payment",
+        "holidays_json",
+    )
+    previous_values = {field: getattr(current_policy, field) for field in impactful_fields}
     policy = update_payroll_policy(db, **payload.model_dump())
+    if any(previous_values[field] != getattr(policy, field) for field in impactful_fields):
+        from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_settings_change
+
+        reconcile_existing_payrolls_for_settings_change(
+            db,
+            reason="payroll_policy_updated",
+            created_by=current_user.id,
+        )
     db.commit()
     db.refresh(policy)
     return api_success(policy)
