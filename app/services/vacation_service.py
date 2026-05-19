@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.exceptions.db_exceptions.noVacationFound import NoVacationFound
 from app.models.auth import User
+from app.models.attendance_payroll import AttendanceCorrection, AttendanceDay, AttendanceEvent
 from app.models.vacation import Vacation
 from app.models.types.vacationStatus import VacationStatuses
 from app.schemas.vacationBaseModel import VacationBaseModel, UpdateVacationBaseModel
@@ -166,6 +167,62 @@ def get_emp_all_vacations(emp_id:int,db:Session):
         .where(Vacation.employee_id==emp_id)
     ).all()
 
+
+def _clear_or_recalculate_removed_vacation_days(
+    employee_id: int,
+    start_date: date,
+    end_date: date,
+    db: Session,
+    *,
+    reason: str,
+):
+    from app.services.attendance_calculation_service import calculate_attendance_day
+    from app.services.payroll_calculation_service import sync_payroll_with_attendance_context
+
+    today = date.today()
+    current = start_date
+    removable_statuses = {"paid_vacation", "unpaid_vacation", "sick_leave", "absent"}
+
+    while current <= end_date:
+        day = db.scalar(
+            select(AttendanceDay).where(
+                AttendanceDay.employee_id == employee_id,
+                AttendanceDay.work_date == current,
+            )
+        )
+
+        if not day:
+            current = date.fromordinal(current.toordinal() + 1)
+            continue
+
+        has_events = db.scalar(
+            select(AttendanceEvent.id).where(AttendanceEvent.attendance_day_id == day.id).limit(1)
+        )
+        has_corrections = db.scalar(
+            select(AttendanceCorrection.id).where(AttendanceCorrection.attendance_day_id == day.id).limit(1)
+        )
+        has_times = bool(day.check_in_time or day.break_start_time or day.break_end_time or day.check_out_time)
+
+        if (
+            current > today
+            and not has_events
+            and not has_corrections
+            and not has_times
+            and day.status in removable_statuses
+        ):
+            db.delete(day)
+            db.flush()
+            sync_payroll_with_attendance_context(
+                employee_id=employee_id,
+                work_date=current,
+                db=db,
+                trigger_reason=reason,
+            )
+        else:
+            calculate_attendance_day(employee_id, current, db, trigger_reason=reason)
+
+        current = date.fromordinal(current.toordinal() + 1)
+
     
 def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = None):
     ensure_vacation_balance_available(
@@ -206,9 +263,12 @@ def update_vacation(updated_vac: UpdateVacationBaseModel, db: Session, *, actor:
     vac = db.get(Vacation,updated_vac.id)
     if not vac:
         raise NoVacationFound(f"No vacation found with this id {updated_vac.id}")
+    old_employee_id = vac.employee_id
     old_start = vac.start_date
     old_end = vac.end_date
     old_status = vac.vacation_status
+    old_type = vac.vacation_type
+    old_is_paid = vac.is_paid
 
     for key,val in updated_vac.model_dump(exclude_unset=True).items():
         if val is None or key == "id":
@@ -228,10 +288,33 @@ def update_vacation(updated_vac: UpdateVacationBaseModel, db: Session, *, actor:
         exclude_vacation_id=vac.id,
     )
     db.flush()
-    if vac.vacation_status == int(VacationStatuses.approved):
+    vacation_changed = any(
+        (
+            old_employee_id != vac.employee_id,
+            old_start != vac.start_date,
+            old_end != vac.end_date,
+            old_status != vac.vacation_status,
+            old_type != vac.vacation_type,
+            old_is_paid != vac.is_paid,
+        )
+    )
+    if old_status == int(VacationStatuses.approved) and vacation_changed:
+        removal_reason = (
+            "vacation_cancelled"
+            if vac.vacation_status == int(VacationStatuses.cancelled)
+            else "vacation_rejected"
+            if vac.vacation_status == int(VacationStatuses.rejected)
+            else "vacation_removed"
+        )
+        _clear_or_recalculate_removed_vacation_days(
+            old_employee_id,
+            old_start,
+            old_end,
+            db,
+            reason=removal_reason,
+        )
+    if vac.vacation_status == int(VacationStatuses.approved) and vacation_changed:
         sync_vacation_with_payroll(vac.employee_id, vac.start_date, vac.end_date, db, reason="vacation_approved")
-    elif old_status == int(VacationStatuses.approved):
-        sync_vacation_with_payroll(vac.employee_id, old_start, old_end, db, reason="vacation_rejected")
     if old_status != vac.vacation_status:
         db.refresh(vac, attribute_names=["employee_tab"])
         _notify_vacation_status_change(vac, db, actor=actor)
@@ -246,9 +329,17 @@ def delete_vacation(id:int,db:Session):
     employee_id = vac.employee_id
     start_date = vac.start_date
     end_date = vac.end_date
+    was_approved = vac.vacation_status == int(VacationStatuses.approved)
     db.delete(vac)
     db.flush()
-    sync_vacation_with_payroll(employee_id, start_date, end_date, db, reason="vacation_rejected")
+    if was_approved:
+        _clear_or_recalculate_removed_vacation_days(
+            employee_id,
+            start_date,
+            end_date,
+            db,
+            reason="vacation_rejected",
+        )
     db.commit()
     
     
