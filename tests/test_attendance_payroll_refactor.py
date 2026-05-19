@@ -35,6 +35,8 @@ from app.services.attendance_calculation_service import (
     create_attendance_correction,
     create_attendance_event,
     delete_attendance_day,
+    get_attendance_days,
+    get_attendance_days_by_date,
     process_pending_attendance_notifications,
 )
 from app.services.payroll_calculation_service import (
@@ -1106,6 +1108,94 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(results["calculation_data_json"]["missing_attendance_days"], 0)
         self.assertEqual(results["attendance_deduction_amount"], Decimal("0.00"))
         self.assertEqual(results["net_salary"], Decimal("85000.00"))
+
+    def test_employee_range_read_materializes_weekly_off_rows_as_approved(self):
+        rows = get_attendance_days(self.employee.id, date(2026, 5, 1), date(2026, 5, 3), self.db)
+
+        self.assertEqual([row.work_date for row in rows], [date(2026, 5, 1), date(2026, 5, 2)])
+        self.assertTrue(all(row.status == "weekly_off" for row in rows))
+        self.assertTrue(all(row.review_status == "approved" for row in rows))
+        self.assertTrue(all(row.reviewed_at is not None for row in rows))
+        self.assertTrue(all(row.unpaid_minutes == 0 for row in rows))
+        self.assertTrue(all(row.absence_minutes == 0 for row in rows))
+        stored_rows = self.db.scalars(
+            select(AttendanceDay)
+            .where(
+                AttendanceDay.employee_id == self.employee.id,
+                AttendanceDay.work_date >= date(2026, 5, 1),
+                AttendanceDay.work_date <= date(2026, 5, 3),
+            )
+            .order_by(AttendanceDay.work_date.asc())
+        ).all()
+        self.assertEqual([row.work_date for row in stored_rows], [date(2026, 5, 1), date(2026, 5, 2)])
+
+    def test_daily_read_materializes_weekly_off_rows_for_active_employees_only(self):
+        inactive_employee = Employees(
+            first_name="Inactive",
+            last_name="Employee",
+            fullname="Inactive Employee",
+            job_title="Engineer",
+            phone="0987654321",
+            email="inactive@example.com",
+            department_id=None,
+            position_id=None,
+            position=None,
+            status="inactive",
+            hire_date=date(2026, 1, 1),
+            dues=Decimal("0.00"),
+            salary_type=0,
+            monthly_price=Decimal("1000.00"),
+            day_price=Decimal("0.00"),
+            hour_price=Decimal("0.00"),
+            extra_hours_price=Decimal("0.00"),
+            daily_work_hours=8,
+            vacation_days=0,
+            is_active=False,
+            allowed_late=Decimal("0.00"),
+            min_extraTime=Decimal("0.00"),
+            joined=date(2026, 1, 1),
+        )
+        self.db.add(inactive_employee)
+        self.db.commit()
+
+        rows = get_attendance_days_by_date(date(2026, 5, 1), self.db)
+
+        self.assertEqual([row.employee_id for row in rows], [self.employee.id])
+        self.assertEqual(rows[0].status, "weekly_off")
+
+    def test_weekly_off_materialization_is_idempotent_and_does_not_create_payroll_history(self):
+        before_history_count = len(self.db.scalars(select(PayrollCalculationHistory)).all())
+
+        first_rows = get_attendance_days(self.employee.id, date(2026, 5, 1), date(2026, 5, 3), self.db)
+        second_rows = get_attendance_days(self.employee.id, date(2026, 5, 1), date(2026, 5, 3), self.db)
+
+        stored_rows = self.db.scalars(
+            select(AttendanceDay)
+            .where(
+                AttendanceDay.employee_id == self.employee.id,
+                AttendanceDay.work_date >= date(2026, 5, 1),
+                AttendanceDay.work_date <= date(2026, 5, 3),
+            )
+            .order_by(AttendanceDay.work_date.asc())
+        ).all()
+
+        self.assertEqual(len(first_rows), 2)
+        self.assertEqual(len(second_rows), 2)
+        self.assertEqual([row.work_date for row in stored_rows], [date(2026, 5, 1), date(2026, 5, 2)])
+        self.assertEqual(len(self.db.scalars(select(PayrollCalculationHistory)).all()), before_history_count)
+
+    def test_weekly_off_date_cannot_be_corrected_to_absent(self):
+        with self.assertRaises(BadRequestException):
+            apply_smart_attendance_status_correction(
+                self.employee.id,
+                date(2026, 5, 1),
+                "absent",
+                corrected_by=1,
+                reason="Attempt to mark weekly off absent",
+                options={},
+                db=self.db,
+            )
+        self.db.rollback()
 
     def test_current_period_calendar_days_mode_accrues_through_cutoff_date(self):
         period = self._payroll_period_for_month(2026, 5)

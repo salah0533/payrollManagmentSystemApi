@@ -296,6 +296,88 @@ def _get_vacation(employee_id: int, work_date: date, db: Session) -> Vacation | 
     )
 
 
+def _is_weekly_off_date(schedule, work_date: date) -> bool:
+    weekly_off_days = {item.lower() for item in (schedule.weekly_off_days or [])}
+    return WEEKDAY_NAMES[work_date.weekday()] in weekly_off_days
+
+
+def _materialize_weekly_off_rows(
+    employee_ids: list[int],
+    start_date: date,
+    end_date: date,
+    db: Session,
+) -> int:
+    if not employee_ids or start_date > end_date:
+        return 0
+
+    existing_days = db.scalars(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id.in_(employee_ids),
+            AttendanceDay.work_date >= start_date,
+            AttendanceDay.work_date <= end_date,
+        )
+    ).all()
+    existing_keys = {(day.employee_id, day.work_date) for day in existing_days}
+
+    created = 0
+    current = start_date
+    while current <= end_date:
+        for employee_id in employee_ids:
+            key = (employee_id, current)
+            if key in existing_keys:
+                continue
+
+            schedule = get_employee_schedule(employee_id, current, db)
+            if not _is_weekly_off_date(schedule, current):
+                continue
+
+            reviewed_at = _utc_now()
+            day = AttendanceDay(
+                employee_id=employee_id,
+                work_date=current,
+                work_schedule_id=schedule.id,
+                expected_work_minutes=0,
+                actual_work_minutes=0,
+                break_minutes=0,
+                normal_paid_minutes=0,
+                late_minutes=0,
+                early_leave_minutes=0,
+                late_makeup_minutes=0,
+                overtime_minutes=0,
+                absence_minutes=0,
+                unpaid_minutes=0,
+                status="weekly_off",
+                review_status="approved",
+                reviewed_at=reviewed_at,
+                reviewed_by=None,
+                locked_at=None,
+                is_manually_corrected=False,
+                calculated_at=reviewed_at,
+            )
+            db.add(day)
+            existing_keys.add(key)
+            created += 1
+        current += timedelta(days=1)
+
+    if created:
+        db.commit()
+    return created
+
+
+def _materialize_weekly_off_rows_for_employee(employee_id: int, start_date: date, end_date: date, db: Session) -> int:
+    employee = db.get(Employees, employee_id)
+    if not employee or not employee.is_active:
+        return 0
+    return _materialize_weekly_off_rows([employee_id], start_date, end_date, db)
+
+
+def _materialize_weekly_off_rows_for_active_employees(start_date: date, end_date: date, db: Session) -> int:
+    employee_ids = db.scalars(
+        select(Employees.id).where(Employees.is_active.is_(True)).order_by(Employees.id.asc())
+    ).all()
+    return _materialize_weekly_off_rows(employee_ids, start_date, end_date, db)
+
+
 def _get_or_create_attendance_day(employee_id: int, work_date: date, db: Session) -> AttendanceDay:
     day = db.scalar(
         select(AttendanceDay).where(
@@ -886,6 +968,7 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
     schedule = get_employee_schedule(employee_id, work_date, db)
     policy = get_or_create_payroll_policy(db)
     target_status = target_status.strip().lower()
+    is_weekly_off_day = _is_weekly_off_date(schedule, work_date)
 
     if target_status == "present":
         return {
@@ -914,6 +997,11 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
             "status": "late",
         }
     if target_status == "absent":
+        if is_weekly_off_day:
+            raise BadRequestException(
+                "Weekly off days cannot be changed to absent",
+                message_key="errors.weekly_off_cannot_be_absent",
+            )
         return {
             "check_in_time": None,
             "break_start_time": None,
@@ -946,8 +1034,7 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
             "status": "sick_leave",
         }
     if target_status == "weekly_off":
-        weekly_off = WEEKDAY_NAMES[work_date.weekday()] in {item.lower() for item in (schedule.weekly_off_days or [])}
-        if not weekly_off:
+        if not is_weekly_off_day:
             raise BadRequestException("This date is not a weekly off day in the assigned work schedule", message_key="errors.weekly_off_only")
         return {
             "check_in_time": None,
@@ -1178,6 +1265,7 @@ def review_attendance_day(employee_id: int, work_date: date, review_status: str,
 
 
 def get_attendance_day(employee_id: int, work_date: date, db: Session) -> AttendanceDay | None:
+    _materialize_weekly_off_rows_for_employee(employee_id, work_date, work_date, db)
     return db.scalar(
         select(AttendanceDay)
         .options(selectinload(AttendanceDay.events))
@@ -1189,6 +1277,7 @@ def get_attendance_day(employee_id: int, work_date: date, db: Session) -> Attend
 
 
 def get_attendance_days(employee_id: int, start_date: date, end_date: date, db: Session) -> list[AttendanceDay]:
+    _materialize_weekly_off_rows_for_employee(employee_id, start_date, end_date, db)
     return db.scalars(
         select(AttendanceDay)
         .options(selectinload(AttendanceDay.events))
@@ -1202,6 +1291,7 @@ def get_attendance_days(employee_id: int, start_date: date, end_date: date, db: 
 
 
 def get_attendance_days_by_date(work_date: date, db: Session) -> list[AttendanceDay]:
+    _materialize_weekly_off_rows_for_active_employees(work_date, work_date, db)
     return db.scalars(
         select(AttendanceDay)
         .options(selectinload(AttendanceDay.events))
@@ -1211,6 +1301,7 @@ def get_attendance_days_by_date(work_date: date, db: Session) -> list[Attendance
 
 
 def get_attendance_days_in_range(start_date: date, end_date: date, db: Session) -> list[AttendanceDay]:
+    _materialize_weekly_off_rows_for_active_employees(start_date, end_date, db)
     return db.scalars(
         select(AttendanceDay)
         .options(selectinload(AttendanceDay.events))
