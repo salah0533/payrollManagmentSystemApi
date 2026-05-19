@@ -76,7 +76,7 @@ class UserCreateRequest(BaseModel):
     language: LanguageCode = LanguageCode.en
     role_ids: list[int] = Field(default_factory=list)
     is_active: bool = True
-    must_change_password: bool = True
+    must_change_password: bool = False
 
     @field_validator("username")
     @classmethod
