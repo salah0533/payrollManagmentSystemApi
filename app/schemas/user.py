@@ -203,6 +203,29 @@ class EmployeeRead(BaseModel):
     user_id: Optional[int] = None
 
 
+class EmployeeCompensationRead(BaseModel):
+    id: int
+    employee_id: int
+    salary_type: str
+    base_monthly_salary: Optional[Decimal] = None
+    daily_rate: Optional[Decimal] = None
+    hourly_rate: Optional[Decimal] = None
+    overtime_rate: Optional[Decimal] = None
+    late_deduction_rate: Optional[Decimal] = None
+    daily_rate_override: Optional[Decimal] = None
+    hourly_rate_override: Optional[Decimal] = None
+    overtime_rate_override: Optional[Decimal] = None
+    late_deduction_rate_override: Optional[Decimal] = None
+    currency: str
+    effective_from: date
+    effective_to: Optional[date] = None
+    is_active: bool
+    created_at: datetime
+    created_by: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SelfAttendanceActionRequest(BaseModel):
     event_time: Optional[datetime] = None
     note: Optional[str] = None

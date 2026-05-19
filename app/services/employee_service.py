@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -9,12 +9,13 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.security import utc_now
 from app.exceptions.base_exception import ForbiddenException
 from app.models.auth import User
+from app.models.attendance_payroll import EmployeeCompensation
 from app.models.employee_reference import Department, Position
 from app.models.employees import Employees
-from app.schemas.user import EmployeeCreateRequest, EmployeeRead, EmployeeUpdateRequest, UserCreateRequest
+from app.schemas.user import EmployeeCompensationRead, EmployeeCreateRequest, EmployeeRead, EmployeeUpdateRequest, UserCreateRequest
 from app.services.auto_attendance_service import resolve_auto_attendance_effective_from
 from app.services.audit_service import save_audit_log, serialize_model
-from app.services.policy_service import get_default_work_schedule, get_or_create_payroll_policy
+from app.services.policy_service import SALARY_TYPE_MAP, get_default_work_schedule, get_or_create_payroll_policy
 from app.services.user_service import ResourceConflictException, get_resource_or_404
 from app.services.user_service import create_user, serialize_employee
 
@@ -156,6 +157,150 @@ def _sync_employee_auto_attendance(
         employee.auto_attendance_effective_from = resolve_auto_attendance_effective_from(employee.id, db)
 
 
+def _build_employee_compensation_values(employee: Employees, db: Session) -> dict[str, Decimal | str | date | bool | int | None]:
+    policy = get_or_create_payroll_policy(db)
+    salary_type = SALARY_TYPE_MAP.get(employee.salary_type, "monthly")
+    monthly_price = Decimal(str(employee.monthly_price or 0))
+    day_price = Decimal(str(employee.day_price or 0))
+    hour_price = Decimal(str(employee.hour_price or 0))
+    extra_hours_price = Decimal(str(employee.extra_hours_price or 0))
+
+    if salary_type == "monthly":
+        daily_rate = Decimal("0.00")
+        hourly_rate = Decimal("0.00")
+        late_deduction_rate = Decimal("0.00")
+    else:
+        daily_rate = day_price
+        hourly_rate = hour_price
+        late_deduction_rate = (hour_price / Decimal("60")) if hour_price else Decimal("0.00")
+
+    return {
+        "employee_id": employee.id,
+        "salary_type": salary_type,
+        "base_monthly_salary": monthly_price,
+        "daily_rate": daily_rate,
+        "hourly_rate": hourly_rate,
+        "overtime_rate": extra_hours_price,
+        "late_deduction_rate": late_deduction_rate,
+        "daily_rate_override": None,
+        "hourly_rate_override": None,
+        "overtime_rate_override": None,
+        "late_deduction_rate_override": None,
+        "currency": policy.default_currency,
+        "effective_from": employee.hire_date or employee.joined or date.today(),
+        "effective_to": None,
+        "is_active": True,
+    }
+
+
+def _compensation_fields_equal(compensation: EmployeeCompensation, values: dict[str, Decimal | str | date | bool | int | None]) -> bool:
+    comparable_fields = (
+        "salary_type",
+        "base_monthly_salary",
+        "daily_rate",
+        "hourly_rate",
+        "overtime_rate",
+        "late_deduction_rate",
+        "daily_rate_override",
+        "hourly_rate_override",
+        "overtime_rate_override",
+        "late_deduction_rate_override",
+        "currency",
+    )
+    for field_name in comparable_fields:
+        if getattr(compensation, field_name) != values[field_name]:
+            return False
+    return True
+
+
+def _sync_employee_compensation_record(
+    employee: Employees,
+    db: Session,
+    *,
+    actor: User | None = None,
+    effective_from: date | None = None,
+) -> EmployeeCompensation:
+    values = _build_employee_compensation_values(employee, db)
+    effective_date = effective_from or date.today()
+    values["effective_from"] = effective_date
+
+    latest = db.scalar(
+        select(EmployeeCompensation)
+        .where(EmployeeCompensation.employee_id == employee.id)
+        .order_by(EmployeeCompensation.effective_from.desc(), EmployeeCompensation.id.desc())
+    )
+
+    if latest and _compensation_fields_equal(latest, values):
+        if latest.effective_to is None or latest.effective_to >= effective_date:
+            latest.is_active = True
+        db.add(latest)
+        db.flush()
+        return latest
+
+    if latest and latest.effective_from == effective_date:
+        old_data = serialize_model(latest)
+        for key, value in values.items():
+            setattr(latest, key, value)
+        latest.created_by = actor.id if actor else latest.created_by
+        db.add(latest)
+        db.flush()
+        save_audit_log(
+            db,
+            action="employee_compensation_updated",
+            entity_type="EmployeeCompensation",
+            entity_id=latest.id,
+            old_data_json=old_data,
+            new_data_json=serialize_model(latest),
+            user_id=actor.id if actor else None,
+        )
+        return latest
+
+    if latest and latest.effective_to is None and latest.effective_from < effective_date:
+        latest.effective_to = effective_date - timedelta(days=1)
+        latest.is_active = False
+        db.add(latest)
+
+    compensation = EmployeeCompensation(
+        **values,
+        created_at=utc_now(),
+        created_by=actor.id if actor else None,
+    )
+    db.add(compensation)
+    db.flush()
+    save_audit_log(
+        db,
+        action="employee_compensation_created",
+        entity_type="EmployeeCompensation",
+        entity_id=compensation.id,
+        new_data_json=serialize_model(compensation),
+        user_id=actor.id if actor else None,
+    )
+    return compensation
+
+
+def get_employee_compensation_history(employee_id: int, db: Session) -> list[EmployeeCompensationRead]:
+    employee = get_resource_or_404(
+        db.scalar(select(Employees).where(Employees.id == employee_id, Employees.deleted_at.is_(None))),
+        resource_name="Employee",
+        identifier=employee_id,
+    )
+
+    if not db.scalar(select(EmployeeCompensation.id).where(EmployeeCompensation.employee_id == employee_id)):
+        _sync_employee_compensation_record(
+            employee,
+            db,
+            effective_from=employee.hire_date or employee.joined or date.today(),
+        )
+        db.commit()
+
+    rows = db.scalars(
+        select(EmployeeCompensation)
+        .where(EmployeeCompensation.employee_id == employee_id)
+        .order_by(EmployeeCompensation.effective_from.desc(), EmployeeCompensation.id.desc())
+    ).all()
+    return [EmployeeCompensationRead.model_validate(row) for row in rows]
+
+
 def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | None = None) -> EmployeeRead:
     legacy_defaults = _legacy_attendance_defaults(db)
     employee = Employees(
@@ -189,6 +334,12 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
     db.add(employee)
     db.flush()
     _sync_employee_auto_attendance(employee, payload, db)
+    _sync_employee_compensation_record(
+        employee,
+        db,
+        actor=actor,
+        effective_from=employee.hire_date or employee.joined or date.today(),
+    )
     db.flush()
 
     if payload.create_user_account:
@@ -230,10 +381,22 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
     )
 
     old_data = serialize_model(employee)
+    previous_compensation_state = {
+        "salary_type": employee.salary_type,
+        "monthly_price": employee.monthly_price,
+        "day_price": employee.day_price,
+        "hour_price": employee.hour_price,
+        "extra_hours_price": employee.extra_hours_price,
+    }
     _sync_employee_fields(employee, payload, db)
     _sync_employee_auto_attendance(employee, payload, db)
     db.add(employee)
     db.flush()
+    if any(
+        getattr(employee, key) != previous_compensation_state[key]
+        for key in previous_compensation_state
+    ):
+        _sync_employee_compensation_record(employee, db, actor=actor, effective_from=date.today())
     save_audit_log(
         db,
         action="employee_updated",

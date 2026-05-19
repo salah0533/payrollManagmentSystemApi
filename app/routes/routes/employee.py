@@ -6,7 +6,14 @@ from app.dependencies.auth import require_permissions
 from app.db.session import get_db
 from app.models.auth import User
 from app.schemas.user import EmployeeCreateRequest, EmployeeUpdateRequest
-from app.services.employee_service import add_employee, delete_employee, get_employee, get_employees, update_employee
+from app.services.employee_service import (
+    add_employee,
+    delete_employee,
+    get_employee,
+    get_employee_compensation_history,
+    get_employees,
+    update_employee,
+)
 
 
 router = APIRouter()
@@ -25,6 +32,15 @@ def get_employee_by_id(
     current_user: User = Depends(require_permissions("employees.read")),
 ):
     return api_success(get_employee(id,db))
+
+
+@router.get("/{id}/compensation-history")
+def get_employee_compensation_timeline(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("employees.read")),
+):
+    return api_success(get_employee_compensation_history(id, db))
 
 @router.post("/")
 def create_employee(
