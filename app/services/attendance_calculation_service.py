@@ -68,6 +68,19 @@ def _minutes_between(start_value: time, end_value: time) -> int:
     return max(0, int((end_dt - start_dt).total_seconds() // 60))
 
 
+def _overlap_minutes(
+    window_start: time,
+    window_end: time,
+    range_start: time,
+    range_end: time,
+) -> int:
+    overlap_start = max(window_start, range_start)
+    overlap_end = min(window_end, range_end)
+    if overlap_end <= overlap_start:
+        return 0
+    return _minutes_between(overlap_start, overlap_end)
+
+
 def _day_bounds(work_date: date, schedule_timezone: tzinfo) -> tuple[datetime, datetime]:
     start_local = datetime.combine(work_date, time.min, tzinfo=schedule_timezone)
     end_local = datetime.combine(work_date, time.max, tzinfo=schedule_timezone)
@@ -411,37 +424,57 @@ def _apply_corrections(day: AttendanceDay, db: Session) -> set[str]:
         .order_by(AttendanceCorrection.corrected_at.asc(), AttendanceCorrection.id.asc())
     ).all()
 
-    applied_fields: set[str] = set()
-    for correction in corrections:
+    def _override_values(correction: AttendanceCorrection) -> dict[str, str | None]:
+        options = correction.options_json or {}
+        if correction.correction_type == "field":
+            requested_values = options.get("requested_values")
+            if isinstance(requested_values, dict):
+                return requested_values
+        if correction.correction_type == "smart_status":
+            generated_values = options.get("generated_values")
+            if isinstance(generated_values, dict):
+                return generated_values
         if correction.new_values_json:
-            for field_name, field_value in correction.new_values_json.items():
-                if field_name not in {
-                    "check_in_time",
-                    "break_start_time",
-                    "break_end_time",
-                    "check_out_time",
-                    "status",
-                }:
-                    continue
-                parsed_value = field_value
-                if field_name.endswith("_time") and field_value:
-                    parsed_value = time.fromisoformat(field_value)
-                setattr(day, field_name, parsed_value)
-                applied_fields.add(field_name)
-            continue
-        if correction.field_changed not in {
+            return correction.new_values_json
+        if correction.field_changed in {
             "check_in_time",
             "break_start_time",
             "break_end_time",
             "check_out_time",
             "status",
         }:
+            return {correction.field_changed: correction.new_value}
+        return {}
+
+    applied_fields: set[str] = set()
+    latest_values: dict[str, tuple[str | None, int]] = {}
+    for correction in corrections:
+        for field_name, field_value in _override_values(correction).items():
+            if field_name not in {
+                "check_in_time",
+                "break_start_time",
+                "break_end_time",
+                "check_out_time",
+                "status",
+            }:
+                continue
+            latest_values[field_name] = (field_value, correction.id)
+
+    latest_time_correction_id = 0
+    latest_status_correction_id = 0
+    for field_name, (field_value, correction_id) in latest_values.items():
+        if field_name == "status":
+            latest_status_correction_id = max(latest_status_correction_id, correction_id)
             continue
-        parsed_value = correction.new_value
-        if correction.field_changed.endswith("_time"):
-            parsed_value = time.fromisoformat(correction.new_value) if correction.new_value else None
-        setattr(day, correction.field_changed, parsed_value)
-        applied_fields.add(correction.field_changed)
+        parsed_value = time.fromisoformat(field_value) if field_value else None
+        setattr(day, field_name, parsed_value)
+        applied_fields.add(field_name)
+        latest_time_correction_id = max(latest_time_correction_id, correction_id)
+
+    if "status" in latest_values and latest_status_correction_id >= latest_time_correction_id:
+        status_value, _ = latest_values["status"]
+        setattr(day, "status", status_value)
+        applied_fields.add("status")
 
     day.is_manually_corrected = bool(corrections)
     return applied_fields
@@ -487,10 +520,14 @@ def _requires_minimum_attendance_review(
 
 
 def _apply_allowed_late_grace(raw_late_minutes: int, allowed_late_minutes: int) -> tuple[int, int]:
+    raw_late_minutes = max(0, int(raw_late_minutes or 0))
     capped_allowed_late = max(0, int(allowed_late_minutes or 0))
-    forgiven_late_minutes = min(max(0, raw_late_minutes), capped_allowed_late)
-    excess_late_minutes = max(0, raw_late_minutes - forgiven_late_minutes)
-    return forgiven_late_minutes, excess_late_minutes
+    if raw_late_minutes <= capped_allowed_late:
+        return raw_late_minutes, 0
+
+    # Once the employee crosses the grace limit, the grace is lost and the
+    # entire lateness from schedule start becomes unpaid/late.
+    return 0, raw_late_minutes
 
 
 def _resolve_review_status(
@@ -611,6 +648,16 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         actual_break = 0
         if day.break_start_time and day.break_end_time:
             actual_break = _cap_break_minutes(raw_work_minutes, _minutes_between(day.break_start_time, day.break_end_time))
+        else:
+            scheduled_break_start, scheduled_break_end = _scheduled_break_window(work_date, schedule)
+            if scheduled_break_start and scheduled_break_end:
+                scheduled_break_overlap = _overlap_minutes(
+                    scheduled_break_start,
+                    scheduled_break_end,
+                    day.check_in_time,
+                    day.check_out_time,
+                )
+                actual_break = _cap_break_minutes(raw_work_minutes, scheduled_break_overlap)
 
         actual_work_minutes = max(0, raw_work_minutes - actual_break)
         day.actual_work_minutes = actual_work_minutes
@@ -798,31 +845,72 @@ def _serialize_day_values(day: AttendanceDay) -> dict[str, str | None]:
     }
 
 
+def _smart_override_time(options: dict, field_name: str) -> time | None:
+    value = options.get(field_name)
+    if value in (None, ""):
+        return None
+    return time.fromisoformat(str(value))
+
+
+def _smart_status_time_values(
+    *,
+    work_date: date,
+    schedule,
+    options: dict,
+    default_check_in: time,
+    default_check_out: time,
+) -> dict[str, str | None]:
+    check_in_time = _smart_override_time(options, "check_in_time") or default_check_in
+    check_out_time = _smart_override_time(options, "check_out_time") or default_check_out
+    if check_in_time >= check_out_time:
+        raise BadRequestException("Check-in must be before check-out", message_key="errors.check_in_before_check_out")
+
+    break_start_time, break_end_time = _scheduled_break_window(work_date, schedule)
+    if not (
+        break_start_time
+        and break_end_time
+        and check_in_time < break_start_time < break_end_time < check_out_time
+    ):
+        break_start_time = None
+        break_end_time = None
+
+    return {
+        "check_in_time": check_in_time.isoformat(),
+        "break_start_time": break_start_time.isoformat() if break_start_time else None,
+        "break_end_time": break_end_time.isoformat() if break_end_time else None,
+        "check_out_time": check_out_time.isoformat(),
+    }
+
+
 def _smart_status_values(employee_id: int, work_date: date, target_status: str, options: dict, db: Session) -> dict[str, str | None]:
     schedule = get_employee_schedule(employee_id, work_date, db)
     policy = get_or_create_payroll_policy(db)
-    break_start_time, break_end_time = _scheduled_break_window(work_date, schedule)
     target_status = target_status.strip().lower()
 
     if target_status == "present":
         return {
-            "check_in_time": schedule.start_time.isoformat(),
-            "break_start_time": break_start_time.isoformat() if break_start_time else None,
-            "break_end_time": break_end_time.isoformat() if break_end_time else None,
-            "check_out_time": schedule.end_time.isoformat(),
+            **_smart_status_time_values(
+                work_date=work_date,
+                schedule=schedule,
+                options=options,
+                default_check_in=schedule.start_time,
+                default_check_out=schedule.end_time,
+            ),
             "status": "present",
         }
     if target_status == "late":
-        if options.get("check_in_time"):
-            late_check_in = time.fromisoformat(str(options["check_in_time"]))
-        else:
+        late_check_in = _smart_override_time(options, "check_in_time")
+        if not late_check_in:
             late_minutes = int(options.get("late_minutes") or max(int(policy.allowed_late_minutes or 0) + 1, 15))
             late_check_in = (datetime.combine(work_date, schedule.start_time) + timedelta(minutes=late_minutes)).time()
         return {
-            "check_in_time": late_check_in.isoformat(),
-            "break_start_time": break_start_time.isoformat() if break_start_time else None,
-            "break_end_time": break_end_time.isoformat() if break_end_time else None,
-            "check_out_time": schedule.end_time.isoformat(),
+            **_smart_status_time_values(
+                work_date=work_date,
+                schedule=schedule,
+                options=options,
+                default_check_in=late_check_in,
+                default_check_out=schedule.end_time,
+            ),
             "status": "late",
         }
     if target_status == "absent":
@@ -886,7 +974,7 @@ def apply_smart_attendance_status_correction(employee_id: int, work_date: date, 
         new_value=target_status,
         old_values_json=old_snapshot,
         new_values_json=target_values,
-        options_json=merged_options,
+        options_json={**merged_options, "generated_values": target_values},
         reason=reason,
         corrected_by=corrected_by,
     )
@@ -897,7 +985,8 @@ def apply_smart_attendance_status_correction(employee_id: int, work_date: date, 
     updated_day.review_status = "approved"
     updated_day.reviewed_at = _utc_now()
     updated_day.reviewed_by = corrected_by
-    correction.new_values_json = _serialize_day_values(updated_day)
+    resulting_day_values = _serialize_day_values(updated_day)
+    correction.options_json = {**(correction.options_json or {}), "resulting_day_values": resulting_day_values}
     db.add(updated_day)
     db.add(correction)
     save_audit_log(
@@ -909,7 +998,7 @@ def apply_smart_attendance_status_correction(employee_id: int, work_date: date, 
         new_data_json={
             "target_status": target_status,
             "generated_values": target_values,
-            "updated_attendance_day": correction.new_values_json,
+            "updated_attendance_day": resulting_day_values,
             "options": merged_options,
             "reason": reason,
         },
@@ -952,7 +1041,7 @@ def create_attendance_correction(payload, db: Session):
         new_value=payload.new_value if correction_field != "multiple_fields" else None,
         old_values_json=old_snapshot,
         new_values_json=requested_updates,
-        options_json={"source": "field_correction", "requested_values": requested_updates, **(payload.options or {})},
+        options_json={"source": "field_correction", **(payload.options or {}), "requested_values": requested_updates},
         reason=payload.reason,
         corrected_by=payload.corrected_by,
     )
@@ -960,7 +1049,8 @@ def create_attendance_correction(payload, db: Session):
     db.flush()
 
     updated_day = calculate_attendance_day(payload.employee_id, payload.work_date, db, trigger_reason="attendance_correction")
-    correction.new_values_json = _serialize_day_values(updated_day)
+    resulting_day_values = _serialize_day_values(updated_day)
+    correction.options_json = {**(correction.options_json or {}), "resulting_day_values": resulting_day_values}
     db.add(correction)
     save_audit_log(
         db,
@@ -971,7 +1061,7 @@ def create_attendance_correction(payload, db: Session):
         new_data_json={
             "field_changed": correction_field,
             "requested_values": requested_updates,
-            "updated_attendance_day": correction.new_values_json,
+            "updated_attendance_day": resulting_day_values,
             "reason": payload.reason,
         },
         user_id=payload.corrected_by,

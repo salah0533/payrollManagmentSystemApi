@@ -24,8 +24,11 @@ from app.models.employees import Employees
 from app.models.notifications import Notification
 from app.models.payment_types import PaymentTypes
 from app.models.salary_type import SalaryType
+from app.schemas.attendance_payroll import AttendanceCorrectionRequest
 from app.services.attendance_calculation_service import (
     apply_smart_attendance_status_correction,
+    calculate_attendance_day,
+    create_attendance_correction,
     create_attendance_event,
     delete_attendance_day,
     process_pending_attendance_notifications,
@@ -244,7 +247,31 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(day.status, "present")
         self.assertEqual(day.normal_paid_minutes, 480)
 
-    def test_allowed_late_grace_only_deducts_minutes_beyond_the_limit(self):
+    def test_allowed_late_grace_at_exact_limit_stays_present(self):
+        policy = self._policy()
+        policy.allowed_late_minutes = 30
+        self.db.add(policy)
+        self.db.commit()
+
+        create_attendance_event(
+            self.employee.id,
+            "check_in",
+            datetime(2026, 5, 6, 9, 30, tzinfo=timezone.utc),
+            self.db,
+        )
+        _, day = create_attendance_event(
+            self.employee.id,
+            "check_out",
+            datetime(2026, 5, 6, 17, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+
+        self.assertEqual(day.status, "present")
+        self.assertEqual(day.late_minutes, 0)
+        self.assertEqual(day.unpaid_minutes, 0)
+        self.assertEqual(day.normal_paid_minutes, 480)
+
+    def test_allowed_late_grace_counts_full_lateness_after_crossing_the_limit(self):
         policy = self._policy()
         policy.allowed_late_minutes = 30
         self.db.add(policy)
@@ -264,9 +291,97 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         )
 
         self.assertEqual(day.status, "late")
-        self.assertEqual(day.late_minutes, 1)
-        self.assertEqual(day.normal_paid_minutes, 479)
-        self.assertEqual(day.unpaid_minutes, 1)
+        self.assertEqual(day.late_minutes, 31)
+        self.assertEqual(day.normal_paid_minutes, 449)
+        self.assertEqual(day.unpaid_minutes, 31)
+
+    def test_scheduled_break_without_break_events_reduces_worked_and_paid_time(self):
+        schedule = self._schedule()
+        schedule.start_time = time(8, 0)
+        schedule.end_time = time(17, 0)
+        schedule.break_start_time = time(12, 0)
+        schedule.break_end_time = time(13, 0)
+        schedule.break_minutes = 60
+        self.db.add(schedule)
+
+        policy = self._policy()
+        policy.allowed_late_minutes = 30
+        self.db.add(policy)
+        self.db.commit()
+
+        create_attendance_event(
+            self.employee.id,
+            "check_in",
+            datetime(2026, 5, 6, 8, 45, tzinfo=timezone.utc),
+            self.db,
+        )
+        _, day = create_attendance_event(
+            self.employee.id,
+            "check_out",
+            datetime(2026, 5, 6, 17, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+
+        self.assertEqual(day.actual_work_minutes, 435)
+        self.assertEqual(day.break_minutes, 60)
+        self.assertEqual(day.status, "late")
+        self.assertEqual(day.late_minutes, 45)
+        self.assertEqual(day.normal_paid_minutes, 435)
+        self.assertEqual(day.unpaid_minutes, 45)
+
+    def test_smart_correction_honors_custom_check_out_for_unpaid_minutes(self):
+        correction, day = apply_smart_attendance_status_correction(
+            self.employee.id,
+            date(2026, 5, 7),
+            "late",
+            corrected_by=1,
+            reason="Approve late arrival with early departure",
+            options={"check_in_time": "09:31", "check_out_time": "16:00"},
+            db=self.db,
+        )
+
+        self.assertEqual(correction.new_values_json["check_in_time"], "09:31:00")
+        self.assertEqual(correction.new_values_json["check_out_time"], "16:00:00")
+        self.assertEqual(day.status, "late")
+        self.assertEqual(day.check_out_time, time(16, 0))
+        self.assertEqual(day.late_minutes, 31)
+        self.assertEqual(day.early_leave_minutes, 60)
+        self.assertEqual(day.unpaid_minutes, 91)
+
+    def test_manual_time_correction_after_smart_status_recomputes_status(self):
+        work_date = date(2026, 5, 11)
+        apply_smart_attendance_status_correction(
+            self.employee.id,
+            work_date,
+            "present",
+            corrected_by=1,
+            reason="Seed full-day attendance",
+            options={},
+            db=self.db,
+        )
+
+        correction, updated_day = create_attendance_correction(
+            AttendanceCorrectionRequest(
+                employee_id=self.employee.id,
+                work_date=work_date,
+                correction_type="field",
+                new_values_json={"check_in_time": "09:31"},
+                reason="Adjust the actual check-in time",
+                corrected_by=1,
+            ),
+            self.db,
+        )
+
+        self.assertEqual(correction.new_values_json, {"check_in_time": "09:31"})
+        self.assertEqual(updated_day.status, "late")
+        self.assertEqual(updated_day.late_minutes, 31)
+        self.assertEqual(updated_day.unpaid_minutes, 31)
+
+        recalculated_day = calculate_attendance_day(self.employee.id, work_date, self.db, trigger_reason="manual_recalculation")
+
+        self.assertEqual(recalculated_day.status, "late")
+        self.assertEqual(recalculated_day.late_minutes, 31)
+        self.assertEqual(recalculated_day.unpaid_minutes, 31)
 
     def test_missing_checkout_notification_waits_until_schedule_end(self):
         create_attendance_event(
