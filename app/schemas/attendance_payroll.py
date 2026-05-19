@@ -231,7 +231,6 @@ class PayrollPolicyPayload(BaseModel):
     late_deduction_enabled: bool = False
     auto_recalculate_draft_payroll: bool = True
     lock_payroll_after_payment: bool = True
-    holidays_json: list[str] = Field(default_factory=list)
     annual_vacation_days_by_year: dict[str, int] = Field(default_factory=dict)
     allow_vacation_carryover: bool = True
     max_vacation_carryover_days: Optional[int] = None

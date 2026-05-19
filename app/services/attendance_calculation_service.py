@@ -18,6 +18,7 @@ from app.services.policy_service import (
     get_schedule_timezone,
     save_audit_log,
 )
+from app.services.vacation_types_services import HOLIDAY_VACATION_TYPE_CODE, get_vacation_type_ids_by_codes
 
 
 ATTENDANCE_EVENT_FIELD_MAP = {
@@ -485,6 +486,13 @@ def _requires_minimum_attendance_review(
     return 0 < actual_work_minutes < minimum_auto_pay_minutes
 
 
+def _apply_allowed_late_grace(raw_late_minutes: int, allowed_late_minutes: int) -> tuple[int, int]:
+    capped_allowed_late = max(0, int(allowed_late_minutes or 0))
+    forgiven_late_minutes = min(max(0, raw_late_minutes), capped_allowed_late)
+    excess_late_minutes = max(0, raw_late_minutes - forgiven_late_minutes)
+    return forgiven_late_minutes, excess_late_minutes
+
+
 def _resolve_review_status(
     *,
     existing_status: str | None,
@@ -576,7 +584,11 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         day.status = "weekly_off"
         day.expected_work_minutes = 0
     elif vacation and not has_attendance_time:
-        if vacation.vacation_type == int(VacationTypes.sick):
+        if _is_holiday_vacation(vacation, db):
+            day.status = "holiday"
+            day.normal_paid_minutes = expected_work_minutes
+            day.unpaid_minutes = 0
+        elif vacation.vacation_type == int(VacationTypes.sick):
             day.status = "sick_leave"
             day.normal_paid_minutes = expected_work_minutes if vacation.is_paid else 0
             day.unpaid_minutes = 0 if vacation.is_paid else expected_work_minutes
@@ -604,9 +616,11 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         day.actual_work_minutes = actual_work_minutes
         day.break_minutes = actual_break
         raw_late_minutes = max(0, _minutes_between(schedule.start_time, day.check_in_time)) if day.check_in_time > schedule.start_time else 0
-        allowed_late_minutes = max(0, int(policy.allowed_late_minutes or 0))
-        forgiven_late_minutes = min(raw_late_minutes, allowed_late_minutes)
-        day.late_minutes = max(0, raw_late_minutes - allowed_late_minutes)
+        forgiven_late_minutes, excess_late_minutes = _apply_allowed_late_grace(
+            raw_late_minutes,
+            int(policy.allowed_late_minutes or 0),
+        )
+        day.late_minutes = excess_late_minutes
         day.early_leave_minutes = max(0, _minutes_between(day.check_out_time, schedule.end_time)) if day.check_out_time < schedule.end_time else 0
 
         extra_after_end = _minutes_between(schedule.end_time, day.check_out_time) if day.check_out_time > schedule.end_time else 0
@@ -905,6 +919,10 @@ def apply_smart_attendance_status_correction(employee_id: int, work_date: date, 
     db.refresh(correction)
     db.refresh(updated_day)
     return correction, updated_day
+
+
+def _is_holiday_vacation(vacation: Vacation, db: Session) -> bool:
+    return int(vacation.vacation_type) in get_vacation_type_ids_by_codes(db, HOLIDAY_VACATION_TYPE_CODE)
 
 
 def create_attendance_correction(payload, db: Session):

@@ -14,6 +14,7 @@ def get_vacation_types(
     current_user: User = Depends(require_authenticated_user),
 ):
     data = get_payment_types_srv(db)
+    db.commit()
     return api_success(data)
 
     # {

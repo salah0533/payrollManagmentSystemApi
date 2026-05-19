@@ -116,7 +116,6 @@ def put_payroll_policy(
         "late_deduction_enabled",
         "auto_recalculate_draft_payroll",
         "lock_payroll_after_payment",
-        "holidays_json",
     )
     previous_values = {field: getattr(current_policy, field) for field in impactful_fields}
     policy = update_payroll_policy(db, **payload.model_dump())

@@ -23,10 +23,10 @@ from app.services.notification_service import NotificationService
 from app.services.policy_service import (
     WEEKDAY_NAMES,
     get_employee_compensation,
+    get_employee_holiday_dates,
     get_employee_schedule,
     get_or_create_payroll_policy,
     get_working_days,
-    parse_holidays,
     save_audit_log,
 )
 
@@ -45,6 +45,10 @@ MONTHLY_RATE_REVIEW_MULTIPLIER = Decimal("2.00")
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _today() -> date:
+    return _utc_now().date()
 
 
 def _decimal(value, default: str = "0.00") -> Decimal:
@@ -304,6 +308,23 @@ def _get_period_bounds(target_date: date) -> tuple[date, date]:
     return date(target_date.year, target_date.month, 1), date(target_date.year, target_date.month, last_day)
 
 
+def _get_effective_payroll_cutoff_date(period: PayrollPeriod) -> date:
+    if period.status in FINAL_PAYROLL_STATUSES:
+        return period.end_date
+    return min(period.end_date, _today())
+
+
+def _get_payroll_accrual_window(period: PayrollPeriod) -> tuple[date, date] | None:
+    cutoff = _get_effective_payroll_cutoff_date(period)
+    if cutoff < period.start_date:
+        return None
+    return period.start_date, cutoff
+
+
+def _should_send_payroll_discrepancy_notification(period: PayrollPeriod) -> bool:
+    return period.status in FINAL_PAYROLL_STATUSES or _today() > period.end_date
+
+
 def get_or_create_payroll_period_for_date(target_date: date, db: Session) -> PayrollPeriod:
     start_date, end_date = _get_period_bounds(target_date)
     period = db.scalar(
@@ -408,8 +429,19 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     policy = get_or_create_payroll_policy(db)
     schedule = get_employee_schedule(payroll.employee_id, period.start_date, db)
     compensation = get_employee_compensation(payroll.employee_id, period.end_date, db)
-    holidays = parse_holidays(policy.holidays_json)
-    working_days = get_working_days(period.start_date, period.end_date, schedule, holidays)
+    holidays = get_employee_holiday_dates(payroll.employee_id, period.start_date, period.end_date, db)
+    full_period_working_days = get_working_days(period.start_date, period.end_date, schedule, holidays)
+    accrual_window = _get_payroll_accrual_window(period)
+    accrued_working_days = (
+        get_working_days(accrual_window[0], accrual_window[1], schedule, holidays)
+        if accrual_window
+        else []
+    )
+    accrued_days = (
+        [day for day in days if accrual_window[0] <= day.work_date <= accrual_window[1]]
+        if accrual_window
+        else []
+    )
     expected_day_minutes = max(
         1,
         _minutes_between_times(schedule.start_time, schedule.end_time) - int(schedule.break_minutes or 0),
@@ -417,7 +449,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     minimum_auto_pay_minutes = max(0, int(getattr(policy, "minimum_auto_pay_minutes", 0) or 0))
     tiny_review_days = [
         day
-        for day in days
+        for day in accrued_days
         if _requires_minimum_attendance_review(day, minimum_auto_pay_minutes)
         and day.review_status not in {"approved", "locked"}
     ]
@@ -428,26 +460,27 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
             day.reviewed_by = None
             db.add(day)
 
-    summary = _attendance_summary(days, expected_day_minutes)
+    summary = _attendance_summary(accrued_days, expected_day_minutes)
     base_monthly_salary = _decimal(compensation.base_monthly_salary)
     resolved_rates = _resolve_monthly_rates(
         compensation,
         base_monthly_salary=base_monthly_salary,
         expected_day_minutes=expected_day_minutes,
-        working_days_count=len(working_days),
+        working_days_count=len(full_period_working_days),
     )
 
-    recorded_dates = {item.work_date for item in days}
-    missing_workdays = [day for day in working_days if day not in recorded_dates]
+    recorded_dates = {item.work_date for item in accrued_days}
+    missing_workdays = [day for day in accrued_working_days if day not in recorded_dates]
     missing_workday_minutes = len(missing_workdays) * expected_day_minutes
-    unpaid_vacation_minutes = sum(day.expected_work_minutes for day in days if day.status == "unpaid_vacation")
+    unpaid_vacation_minutes = sum(day.expected_work_minutes for day in accrued_days if day.status == "unpaid_vacation")
     partial_unpaid_minutes = sum(
         _int(day.unpaid_minutes)
-        for day in days
+        for day in accrued_days
         if day.status not in {"absent", "unpaid_vacation", "incomplete", "weekly_off", "holiday"}
     )
     review_held_paid_minutes = sum(_int(day.normal_paid_minutes) for day in tiny_review_days)
-    period_expected_minutes = _int(resolved_rates["period_expected_minutes"])
+    full_period_expected_minutes = _int(resolved_rates["period_expected_minutes"])
+    period_expected_minutes = len(accrued_working_days) * expected_day_minutes
     earned_unpaid_minutes = min(period_expected_minutes, max(0, _int(summary["unpaid_minutes"]) + missing_workday_minutes))
     earned_paid_minutes = max(0, period_expected_minutes - earned_unpaid_minutes)
     raw_unpaid_minutes = earned_unpaid_minutes + review_held_paid_minutes
@@ -455,6 +488,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     paid_minutes = max(0, period_expected_minutes - unpaid_minutes)
 
     base_salary = _money(base_monthly_salary)
+    normal_amount = _money(resolved_rates["auto_minute_rate"] * Decimal(period_expected_minutes))
     attendance_minute_rate = resolved_rates["auto_minute_rate"]
     earned_attendance_deduction = _money(min(base_salary, _money(attendance_minute_rate * Decimal(earned_unpaid_minutes))))
     attendance_deduction = _money(min(base_salary, _money(attendance_minute_rate * Decimal(unpaid_minutes))))
@@ -476,7 +510,6 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     manual_deduction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "deduction"), Decimal("0.00")))
     correction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "correction"), Decimal("0.00")))
 
-    normal_amount = base_salary
     gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
     earned_deduction_amount = _money(earned_attendance_deduction + manual_deduction_amount)
     deduction_amount = _money(attendance_deduction + manual_deduction_amount)
@@ -498,9 +531,12 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
 
     calc_data = {
         **summary,
-        "working_days_count": resolved_rates["working_days_count"],
+        "working_days_count": len(accrued_working_days),
+        "full_period_working_days_count": resolved_rates["working_days_count"],
         "expected_day_minutes": expected_day_minutes,
         "period_expected_minutes": period_expected_minutes,
+        "full_period_expected_minutes": full_period_expected_minutes,
+        "effective_cutoff_date": accrual_window[1].isoformat() if accrual_window else None,
         "missing_attendance_days": len(missing_workdays),
         "missing_workday_minutes": missing_workday_minutes,
         "earned_paid_minutes": earned_paid_minutes,
@@ -761,7 +797,7 @@ def _upsert_discrepancy(
     db.add(discrepancy)
     db.flush()
     notification_service = NotificationService(db)
-    if not notification_service.notification_exists(
+    if _should_send_payroll_discrepancy_notification(period) and not notification_service.notification_exists(
         notification_type="payroll_discrepancy_detected",
         entity_type="payroll_discrepancy",
         entity_id=discrepancy.id,
@@ -817,9 +853,18 @@ def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: S
     payroll = _get_employee_payroll(employee_id, payroll_period_id, db)
     schedule = get_employee_schedule(employee_id, period.start_date, db)
     policy = get_or_create_payroll_policy(db)
-    holidays = parse_holidays(policy.holidays_json)
-    working_days = get_working_days(period.start_date, period.end_date, schedule, holidays)
+    holidays = get_employee_holiday_dates(employee_id, period.start_date, period.end_date, db)
+    accrual_window = _get_payroll_accrual_window(period)
+    working_days = (
+        get_working_days(accrual_window[0], accrual_window[1], schedule, holidays)
+        if accrual_window
+        else []
+    )
     days = _load_period_attendance(employee_id, period, db)
+    if accrual_window:
+        days = [item for item in days if accrual_window[0] <= item.work_date <= accrual_window[1]]
+    else:
+        days = []
     days_by_date = {item.work_date: item for item in days}
     expected_open: dict[tuple[str, str], str] = {}
 
@@ -846,13 +891,13 @@ def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: S
         select(Vacation).where(
             Vacation.employee_id == employee_id,
             Vacation.vacation_status == int(VacationStatuses.approved),
-            Vacation.start_date <= period.end_date,
+            Vacation.start_date <= (accrual_window[1] if accrual_window else period.start_date),
             Vacation.end_date >= period.start_date,
         )
     ).all()
     for vacation in vacations:
         current = max(vacation.start_date, period.start_date)
-        last = min(vacation.end_date, period.end_date)
+        last = min(vacation.end_date, accrual_window[1]) if accrual_window else period.start_date - timedelta(days=1)
         while current <= last:
             day = days_by_date.get(current)
             if day and (day.check_in_time or day.check_out_time):
@@ -900,6 +945,27 @@ def detect_payroll_discrepancies(employee_id: int, payroll_period_id: int, db: S
         )
         .order_by(PayrollDiscrepancy.created_at.desc(), PayrollDiscrepancy.id.desc())
     ).all()
+
+
+def reconcile_payroll_period_discrepancies(payroll_period_id: int, db: Session) -> list[int]:
+    period = db.get(PayrollPeriod, payroll_period_id)
+    if not period:
+        raise ResourceNotFoundException("Payroll period")
+
+    employee_ids = set(
+        db.scalars(
+            select(EmployeePayroll.employee_id).where(EmployeePayroll.payroll_period_id == payroll_period_id)
+        ).all()
+    )
+    employee_ids.update(
+        db.scalars(
+            select(PayrollDiscrepancy.employee_id).where(PayrollDiscrepancy.payroll_period_id == payroll_period_id)
+        ).all()
+    )
+
+    for employee_id in sorted(employee_ids):
+        detect_payroll_discrepancies(employee_id, payroll_period_id, db)
+    return sorted(employee_ids)
 
 
 def calculate_employee_payroll(
@@ -1013,6 +1079,7 @@ def recalculate_payroll_period(payroll_period_id: int, db: Session, created_by: 
             )
         )
 
+    reconcile_payroll_period_discrepancies(payroll_period_id, db)
     db.commit()
     for payroll in payrolls:
         db.refresh(payroll)
@@ -1272,7 +1339,11 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
     if not payroll:
         raise ResourceNotFoundException("Employee payroll")
 
-    open_high = [item for item in payroll.discrepancies if item.status == "open" and item.severity == "high"]
+    open_high = [
+        item
+        for item in detect_payroll_discrepancies(payroll.employee_id, payroll.payroll_period_id, db)
+        if item.status == "open" and item.severity == "high"
+    ]
     if open_high:
         raise BadRequestException("Resolve high-severity discrepancies before approval", message_key="errors.resolve_high_severity_first")
 
@@ -1338,6 +1409,17 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
     payroll = db.get(EmployeePayroll, employee_payroll_id)
     if not payroll:
         raise ResourceNotFoundException("Employee payroll")
+
+    open_high = [
+        item
+        for item in detect_payroll_discrepancies(payroll.employee_id, payroll.payroll_period_id, db)
+        if item.status == "open" and item.severity == "high"
+    ]
+    if open_high:
+        raise BadRequestException(
+            "Resolve high-severity discrepancies before payment",
+            message_key="errors.resolve_high_severity_before_payment",
+        )
 
     old_status = payroll.status
     old_paid_amount = _decimal(payroll.paid_amount)
@@ -1718,6 +1800,8 @@ def get_payroll_history(employee_payroll_id: int, db: Session):
 
 
 def get_payroll_discrepancies(period_id: int, db: Session):
+    reconcile_payroll_period_discrepancies(period_id, db)
+    db.commit()
     return db.scalars(
         select(PayrollDiscrepancy)
         .where(PayrollDiscrepancy.payroll_period_id == period_id)

@@ -1,6 +1,7 @@
 import unittest
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 import app.models  # noqa: F401
 from app.db.base import Base
+from app.exceptions.base_exception import BadRequestException
 from app.models.auth import User
 from app.models.attendance_payroll import (
     AttendanceDay,
@@ -35,6 +37,8 @@ from app.services.payroll_calculation_service import (
     create_payroll_history_snapshot,
     get_employee_payroll_by_period,
     get_or_create_payroll_period_for_date,
+    get_payroll_discrepancies,
+    mark_employee_payroll_paid,
     reconcile_existing_payrolls_for_settings_change,
 )
 from app.services.policy_service import get_employee_compensation, get_working_days, parse_holidays
@@ -42,6 +46,8 @@ from app.services.policy_service import get_employee_compensation, get_working_d
 
 class AttendancePayrollRefactorTests(unittest.TestCase):
     def setUp(self):
+        self.today_patcher = patch("app.services.payroll_calculation_service._today", return_value=date(2026, 6, 1))
+        self.today_patcher.start()
         self.engine = create_engine("sqlite:///:memory:", future=True)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine, autoflush=False, autocommit=False)
@@ -120,6 +126,7 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
         self.engine.dispose()
+        self.today_patcher.stop()
 
     def _schedule(self) -> WorkSchedule:
         return self.db.scalar(select(WorkSchedule).where(WorkSchedule.is_default.is_(True)))
@@ -236,6 +243,30 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(day.late_minutes, 0)
         self.assertEqual(day.status, "present")
         self.assertEqual(day.normal_paid_minutes, 480)
+
+    def test_allowed_late_grace_only_deducts_minutes_beyond_the_limit(self):
+        policy = self._policy()
+        policy.allowed_late_minutes = 30
+        self.db.add(policy)
+        self.db.commit()
+
+        create_attendance_event(
+            self.employee.id,
+            "check_in",
+            datetime(2026, 5, 6, 9, 31, tzinfo=timezone.utc),
+            self.db,
+        )
+        _, day = create_attendance_event(
+            self.employee.id,
+            "check_out",
+            datetime(2026, 5, 6, 17, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+
+        self.assertEqual(day.status, "late")
+        self.assertEqual(day.late_minutes, 1)
+        self.assertEqual(day.normal_paid_minutes, 479)
+        self.assertEqual(day.unpaid_minutes, 1)
 
     def test_missing_checkout_notification_waits_until_schedule_end(self):
         create_attendance_event(
@@ -878,6 +909,240 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(Decimal(str(approved.total_amount)), Decimal("8.43"))
         self.assertEqual(Decimal(str(approved.balance_amount)), Decimal("8.43"))
         self.assertEqual(approved.status, "approved")
+
+    def test_current_period_monthly_payroll_accrues_through_today(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        cutoff = date(2026, 5, 19)
+        days = [day for day in self._month_days() if day.work_date <= cutoff]
+
+        with patch("app.services.payroll_calculation_service._today", return_value=cutoff):
+            results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        full_workdays = len(self._working_days_for_period(period))
+        accrued_workdays = len([work_day for work_day in self._working_days_for_period(period) if work_day <= cutoff])
+        expected_period_minutes = accrued_workdays * 480
+        expected_net_salary = (Decimal("85000.00") * Decimal(accrued_workdays) / Decimal(full_workdays)).quantize(Decimal("0.01"))
+
+        self.assertEqual(results["calculation_data_json"]["effective_cutoff_date"], "2026-05-19")
+        self.assertEqual(results["calculation_data_json"]["working_days_count"], accrued_workdays)
+        self.assertEqual(results["calculation_data_json"]["period_expected_minutes"], expected_period_minutes)
+        self.assertEqual(results["calculation_data_json"]["missing_attendance_days"], 0)
+        self.assertEqual(results["attendance_deduction_amount"], Decimal("0.00"))
+        self.assertEqual(results["net_salary"], expected_net_salary)
+        self.assertEqual(results["total_amount"], expected_net_salary)
+
+    def test_current_period_discrepancy_detection_ignores_future_missing_attendance(self):
+        period = self._payroll_period_for_month(2026, 5)
+        future_missing_date = date(2026, 5, 25)
+        for day in self._month_days():
+            if day.work_date != future_missing_date:
+                self.db.add(day)
+        self.db.commit()
+
+        with patch("app.services.payroll_calculation_service._today", return_value=date(2026, 5, 19)):
+            payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+            self.db.commit()
+
+        open_discrepancies = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.status == "open",
+            )
+        ).all()
+        self.assertFalse(
+            any(
+                item.discrepancy_type == "missing_attendance"
+                and future_missing_date.isoformat() in item.description
+                for item in open_discrepancies
+            )
+        )
+
+    def test_past_period_discrepancy_detection_includes_missing_past_workday(self):
+        period = self._payroll_period_for_month(2026, 5)
+        missing_date = date(2026, 5, 25)
+        for day in self._month_days():
+            if day.work_date != missing_date:
+                self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.db.commit()
+
+        open_discrepancies = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.status == "open",
+            )
+        ).all()
+        self.assertTrue(
+            any(
+                item.discrepancy_type == "missing_attendance"
+                and missing_date.isoformat() in item.description
+                for item in open_discrepancies
+            )
+        )
+
+    def test_period_reconciliation_auto_resolves_future_missing_attendance(self):
+        period = self._payroll_period_for_month(2026, 5)
+        future_missing_date = date(2026, 5, 25)
+        for day in self._month_days():
+            if day.work_date != future_missing_date:
+                self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.db.commit()
+
+        open_before = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.status == "open",
+            )
+        ).all()
+        self.assertTrue(any(future_missing_date.isoformat() in item.description for item in open_before))
+
+        with patch("app.services.payroll_calculation_service._today", return_value=date(2026, 5, 19)):
+            discrepancies = get_payroll_discrepancies(period.id, self.db)
+
+        refreshed = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.discrepancy_type == "missing_attendance",
+            )
+        ).all()
+        self.assertFalse(
+            any(item.status == "open" and future_missing_date.isoformat() in item.description for item in refreshed)
+        )
+        self.assertTrue(
+            any(item.status == "resolved" and future_missing_date.isoformat() in item.description for item in discrepancies)
+        )
+
+    def test_approval_succeeds_with_only_medium_discrepancies(self):
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.db.add(
+            PayrollDiscrepancy(
+                employee_payroll_id=payroll.id,
+                payroll_period_id=period.id,
+                employee_id=self.employee.id,
+                discrepancy_type="overtime_conflict",
+                description="Manual medium discrepancy",
+                severity="medium",
+                status="open",
+            )
+        )
+        self.db.commit()
+
+        approved = approve_employee_payroll(payroll.id, self.db, approved_by=1)
+        self.assertEqual(approved.status, "approved")
+
+    def test_approval_fails_with_high_discrepancies(self):
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.db.add(
+            PayrollDiscrepancy(
+                employee_payroll_id=payroll.id,
+                payroll_period_id=period.id,
+                employee_id=self.employee.id,
+                discrepancy_type="overtime_conflict",
+                description="Manual high discrepancy",
+                severity="high",
+                status="open",
+            )
+        )
+        self.db.commit()
+
+        with self.assertRaises(BadRequestException):
+            approve_employee_payroll(payroll.id, self.db, approved_by=1)
+
+    def test_payment_succeeds_with_only_medium_discrepancies_when_approved(self):
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.db.add(
+            PayrollDiscrepancy(
+                employee_payroll_id=payroll.id,
+                payroll_period_id=period.id,
+                employee_id=self.employee.id,
+                discrepancy_type="overtime_conflict",
+                description="Manual medium discrepancy",
+                severity="medium",
+                status="open",
+            )
+        )
+        self.db.commit()
+
+        approved = approve_employee_payroll(payroll.id, self.db, approved_by=1)
+        paid = mark_employee_payroll_paid(approved.id, self.db, paid_by=1)
+        self.assertEqual(paid.status, "locked")
+        self.assertEqual(Decimal(str(paid.balance_amount)), Decimal("0.00"))
+
+    def test_payment_fails_with_high_discrepancies(self):
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        approved = approve_employee_payroll(payroll.id, self.db, approved_by=1)
+        self.db.add(
+            PayrollDiscrepancy(
+                employee_payroll_id=approved.id,
+                payroll_period_id=period.id,
+                employee_id=self.employee.id,
+                discrepancy_type="overtime_conflict",
+                description="Manual high discrepancy",
+                severity="high",
+                status="open",
+            )
+        )
+        self.db.commit()
+
+        with self.assertRaises(BadRequestException):
+            mark_employee_payroll_paid(approved.id, self.db, paid_by=1)
+
+    def test_current_period_discrepancy_record_does_not_send_immediate_notification(self):
+        period = self._payroll_period_for_month(2026, 5)
+        missing_date = date(2026, 5, 18)
+        for day in self._month_days():
+            if day.work_date != missing_date:
+                self.db.add(day)
+        self.db.commit()
+
+        with patch("app.services.payroll_calculation_service._today", return_value=date(2026, 5, 19)):
+            payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+            self.db.commit()
+
+        discrepancies = self.db.scalars(
+            select(PayrollDiscrepancy).where(
+                PayrollDiscrepancy.employee_payroll_id == payroll.id,
+                PayrollDiscrepancy.status == "open",
+            )
+        ).all()
+        notifications = self.db.scalars(
+            select(Notification).where(Notification.notification_type == "payroll_discrepancy_detected")
+        ).all()
+
+        self.assertTrue(
+            any(
+                item.discrepancy_type == "missing_attendance"
+                and missing_date.isoformat() in item.description
+                for item in discrepancies
+            )
+        )
+        self.assertEqual(notifications, [])
 
 
 if __name__ == "__main__":

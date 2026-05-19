@@ -18,3 +18,12 @@ class UpdateVacationBaseModel(BaseModel):
     vacation_type:Optional[int]=None
     vacation_status:Optional[int]=None
     is_paid:Optional[bool]=None
+
+
+class BulkVacationCreateModel(BaseModel):
+    employee_ids: list[int]
+    start_date: date
+    end_date: date
+    vacation_type: int
+    vacation_status: int
+    is_paid: bool

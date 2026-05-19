@@ -7,7 +7,7 @@ from app.models.attendance_payroll import AttendanceDay
 from app.models.employees import Employees
 from app.models.types.vacationStatus import VacationStatuses
 from app.models.vacation import Vacation
-from app.services.policy_service import get_default_work_schedule, get_working_days, get_or_create_payroll_policy, parse_holidays
+from app.services.policy_service import get_default_work_schedule, get_employee_holiday_dates, get_working_days
 
 
 def dashboard_attendance_stats(db: Session) -> dict[str, int | float]:
@@ -17,9 +17,11 @@ def dashboard_attendance_stats(db: Session) -> dict[str, int | float]:
     today = date.today()
     month_start = today.replace(day=1)
     schedule = get_default_work_schedule(db)
-    policy = get_or_create_payroll_policy(db)
-    holidays = parse_holidays(policy.holidays_json)
-    workdays_so_far = [item for item in get_working_days(month_start, today, schedule, holidays) if item <= today]
+    active_employee_ids = db.scalars(select(Employees.id).where(Employees.is_active.is_(True))).all()
+    total_possible = 0
+    for employee_id in active_employee_ids:
+        holidays = get_employee_holiday_dates(employee_id, month_start, today, db)
+        total_possible += len([item for item in get_working_days(month_start, today, schedule, holidays) if item <= today])
 
     monthly_days = db.scalars(
         select(AttendanceDay).where(
@@ -68,7 +70,6 @@ def dashboard_attendance_stats(db: Session) -> dict[str, int | float]:
         if day.status in attendance_credit_statuses:
             credited_days += 1
 
-    total_possible = total_active_emps * len(workdays_so_far)
     total_att_percent = (credited_days * 100 / total_possible) if total_possible else 0
     total_vacation = db.scalar(
         select(func.count(Vacation.id)).where(

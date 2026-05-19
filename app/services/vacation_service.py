@@ -8,9 +8,10 @@ from app.models.auth import User
 from app.models.attendance_payroll import AttendanceCorrection, AttendanceDay, AttendanceEvent
 from app.models.vacation import Vacation
 from app.models.types.vacationStatus import VacationStatuses
-from app.schemas.vacationBaseModel import VacationBaseModel, UpdateVacationBaseModel
+from app.schemas.vacationBaseModel import BulkVacationCreateModel, VacationBaseModel, UpdateVacationBaseModel
 from app.services.notification_service import NotificationService
 from app.services.payroll_calculation_service import sync_vacation_with_payroll
+from app.services.vacation_types_services import HOLIDAY_VACATION_TYPE_CODE, get_vacation_type_ids_by_codes
 from app.services.vacation_balance_service import VacationLedgerEntry, ensure_vacation_balance_available
 
 
@@ -168,6 +169,39 @@ def get_emp_all_vacations(emp_id:int,db:Session):
     ).all()
 
 
+def get_holiday_vacation_type_ids(db: Session) -> set[int]:
+    return get_vacation_type_ids_by_codes(db, HOLIDAY_VACATION_TYPE_CODE)
+
+
+def is_holiday_vacation_type(vacation_type_id: int, db: Session) -> bool:
+    return int(vacation_type_id) in get_holiday_vacation_type_ids(db)
+
+
+def get_employee_holiday_dates(employee_id: int, start_date: date, end_date: date, db: Session) -> list[date]:
+    holiday_type_ids = get_holiday_vacation_type_ids(db)
+    if not holiday_type_ids:
+        return []
+
+    vacations = db.scalars(
+        select(Vacation).where(
+            Vacation.employee_id == employee_id,
+            Vacation.vacation_status == int(VacationStatuses.approved),
+            Vacation.vacation_type.in_(holiday_type_ids),
+            Vacation.start_date <= end_date,
+            Vacation.end_date >= start_date,
+        )
+    ).all()
+
+    holiday_dates: set[date] = set()
+    for vacation in vacations:
+        current = max(vacation.start_date, start_date)
+        last = min(vacation.end_date, end_date)
+        while current <= last:
+            holiday_dates.add(current)
+            current = date.fromordinal(current.toordinal() + 1)
+    return sorted(holiday_dates)
+
+
 def _clear_or_recalculate_removed_vacation_days(
     employee_id: int,
     start_date: date,
@@ -225,6 +259,9 @@ def _clear_or_recalculate_removed_vacation_days(
 
     
 def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = None):
+    holiday_type = is_holiday_vacation_type(vac.vacation_type, db)
+    normalized_status = int(VacationStatuses.approved) if holiday_type else vac.vacation_status
+    normalized_paid = True if holiday_type else vac.is_paid
     ensure_vacation_balance_available(
         VacationLedgerEntry(
             id=None,
@@ -232,8 +269,8 @@ def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = No
             start_date=vac.start_date,
             end_date=vac.end_date,
             vacation_type=vac.vacation_type,
-            vacation_status=vac.vacation_status,
-            is_paid=vac.is_paid,
+            vacation_status=normalized_status,
+            is_paid=normalized_paid,
         ),
         db,
     )
@@ -242,22 +279,43 @@ def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = No
         start_date=vac.start_date,
         end_date=vac.end_date,
         vacation_type=vac.vacation_type,
-        vacation_status=vac.vacation_status,
-        is_paid=vac.is_paid,
+        vacation_status=normalized_status,
+        is_paid=normalized_paid,
     )
     db.add(new_vac)
     db.flush()
     db.refresh(new_vac, attribute_names=["employee_tab"])
-    if vac.vacation_status == int(VacationStatuses.approved):
+    if normalized_status == int(VacationStatuses.approved):
         sync_vacation_with_payroll(vac.employee_id, vac.start_date, vac.end_date, db, reason="vacation_approved")
         _notify_vacation_status_change(new_vac, db, actor=actor)
-    elif vac.vacation_status in {int(VacationStatuses.rejected), int(VacationStatuses.cancelled)}:
+    elif normalized_status in {int(VacationStatuses.rejected), int(VacationStatuses.cancelled)}:
         _notify_vacation_status_change(new_vac, db, actor=actor)
     else:
         _notify_vacation_submission(new_vac, db, actor=actor)
     db.commit()
     db.refresh(new_vac)
     return new_vac
+
+
+def add_bulk_vacations(payload: BulkVacationCreateModel, db: Session, *, actor: User | None = None) -> list[Vacation]:
+    created: list[Vacation] = []
+    unique_employee_ids = list(dict.fromkeys(int(employee_id) for employee_id in payload.employee_ids if employee_id))
+    for employee_id in unique_employee_ids:
+        created.append(
+            add_vacation(
+                VacationBaseModel(
+                    employee_id=employee_id,
+                    start_date=payload.start_date,
+                    end_date=payload.end_date,
+                    vacation_type=payload.vacation_type,
+                    vacation_status=payload.vacation_status,
+                    is_paid=payload.is_paid,
+                ),
+                db,
+                actor=actor,
+            )
+        )
+    return created
     
 def update_vacation(updated_vac: UpdateVacationBaseModel, db: Session, *, actor: User | None = None):
     vac = db.get(Vacation,updated_vac.id)

@@ -24,9 +24,9 @@ from app.services.audit_service import save_audit_log
 from app.services.policy_service import (
     WEEKDAY_NAMES,
     get_default_work_schedule,
+    get_employee_holiday_dates,
     get_or_create_payroll_policy,
     get_schedule_timezone,
-    parse_holidays,
 )
 
 
@@ -99,14 +99,13 @@ def _has_approved_vacation(employee_id: int, work_date: date, db: Session) -> bo
 
 def resolve_auto_attendance_effective_from(employee_id: int, db: Session, now: datetime | None = None) -> date:
     schedule = get_default_work_schedule(db)
-    policy = get_or_create_payroll_policy(db)
-    holidays = set(parse_holidays(getattr(policy, "holidays_json", [])))
     local_now = _local_now(schedule, now)
     candidate = local_now.date()
     if _has_shift_completed(local_now, schedule):
         candidate += timedelta(days=1)
 
     while True:
+        holidays = set(get_employee_holiday_dates(employee_id, candidate, candidate, db))
         if _is_schedule_workday(candidate, schedule, holidays) and not _has_approved_vacation(employee_id, candidate, db):
             return candidate
         candidate += timedelta(days=1)
@@ -208,8 +207,6 @@ def apply_auto_attendance_for_day(employee: Employees, work_date: date, schedule
 
 def process_auto_attendance(db: Session, now: datetime | None = None) -> dict[str, int]:
     schedule = get_default_work_schedule(db)
-    policy = get_or_create_payroll_policy(db)
-    holidays = set(parse_holidays(getattr(policy, "holidays_json", [])))
     latest_completed = _latest_completed_work_date(schedule, now)
     employees = db.scalars(
         select(Employees)
@@ -239,6 +236,7 @@ def process_auto_attendance(db: Session, now: datetime | None = None) -> dict[st
             continue
 
         while cursor <= latest_completed:
+            holidays = set(get_employee_holiday_dates(employee.id, cursor, cursor, db))
             result = apply_auto_attendance_for_day(employee, cursor, schedule, holidays, db)
             counts[result] = counts.get(result, 0) + 1
             cursor += timedelta(days=1)

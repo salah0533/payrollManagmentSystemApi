@@ -10,7 +10,10 @@ from app.exceptions.base_exception import ResourceNotFoundException
 from app.models.attendance_payroll import EmployeeCompensation, PayrollPolicy, WorkSchedule
 from app.models.employees import Employees
 from app.models.settings import Settings
+from app.models.types.vacationStatus import VacationStatuses
+from app.models.vacation import Vacation
 from app.services.audit_service import save_audit_log
+from app.services.vacation_types_services import HOLIDAY_VACATION_TYPE_CODE, get_vacation_type_ids_by_codes
 
 
 SALARY_TYPE_MAP = {
@@ -350,6 +353,32 @@ def get_working_days(start_date: date, end_date: date, schedule: WorkSchedule, h
         current += timedelta(days=1)
 
     return result
+
+
+def get_employee_holiday_dates(employee_id: int, start_date: date, end_date: date, db: Session) -> list[date]:
+    holiday_type_ids = get_vacation_type_ids_by_codes(db, HOLIDAY_VACATION_TYPE_CODE)
+    if not holiday_type_ids:
+        return []
+
+    vacations = db.scalars(
+        select(Vacation).where(
+            Vacation.employee_id == employee_id,
+            Vacation.vacation_status == int(VacationStatuses.approved),
+            Vacation.vacation_type.in_(holiday_type_ids),
+            Vacation.start_date <= end_date,
+            Vacation.end_date >= start_date,
+        )
+    ).all()
+
+    holiday_dates: set[date] = set()
+    for vacation in vacations:
+        current = max(vacation.start_date, start_date)
+        last = min(vacation.end_date, end_date)
+        while current <= last:
+            holiday_dates.add(current)
+            current += timedelta(days=1)
+
+    return sorted(holiday_dates)
 
 
 def parse_holidays(values: list[str] | None) -> list[date]:

@@ -228,6 +228,7 @@ def seed_vacation_reference_data(db: Session):
             {"id": 1, "code": "unpaid", "vacation_type": "unpaid"},
             {"id": 2, "code": "sick", "vacation_type": "sick"},
             {"id": 3, "code": "emergency", "vacation_type": "emergency"},
+            {"id": 4, "code": "holiday", "vacation_type": "holiday"},
         ]
         for row in rows:
             _upsert_model(db, VacationTypes, {"code": row["code"]}, {"id": row["id"], "vacation_type": row["vacation_type"]})
