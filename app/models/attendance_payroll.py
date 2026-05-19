@@ -42,6 +42,8 @@ class WorkSchedule(Base):
     name = Column(String(100), nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
+    break_start_time = Column(Time, nullable=True)
+    break_end_time = Column(Time, nullable=True)
     break_minutes = Column(Integer, nullable=False, default=0)
     weekly_off_days = Column(JSON, nullable=False, default=list)
     timezone = Column(String(64), nullable=False, default="Africa/Algiers")

@@ -19,6 +19,8 @@ class NotificationType(str, Enum):
     vacation_rejected = "vacation_rejected"
     vacation_cancelled = "vacation_cancelled"
     attendance_missing_checkin = "attendance_missing_checkin"
+    attendance_missing_break_start = "attendance_missing_break_start"
+    attendance_missing_break_end = "attendance_missing_break_end"
     attendance_missing_checkout = "attendance_missing_checkout"
     attendance_late = "attendance_late"
     attendance_correction_review_required = "attendance_correction_review_required"

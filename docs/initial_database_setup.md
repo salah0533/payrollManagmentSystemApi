@@ -45,7 +45,7 @@ It also seeds:
 ```bash
 alembic upgrade head
 python -m app.scripts.seed_initial_data
-python -m app.run
+python -m app.run_dev
 ```
 
 ## Safe Rerun
@@ -110,6 +110,12 @@ Configure the backend in `.env`:
 - `DEFAULT_ADMIN_PASSWORD`
 - `API_HOST`
 - `API_PORT`
+- `API_WORKERS`
 - `CORS_ORIGINS`
 
 `CORS_ORIGINS` accepts a comma-separated list such as `http://localhost:3000,http://127.0.0.1:8080`.
+
+Use these backend launchers:
+
+- `python -m app.run_dev`: development mode with auto-reload.
+- `python -m app.run_prod`: production-style mode with `API_WORKERS` workers and no reload.

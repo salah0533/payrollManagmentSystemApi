@@ -169,6 +169,8 @@ class WorkSchedulePayload(BaseModel):
     name: str = "Default Schedule"
     start_time: time
     end_time: time
+    break_start_time: Optional[time] = None
+    break_end_time: Optional[time] = None
     break_minutes: int = 0
     weekly_off_days: list[str] = Field(default_factory=lambda: ["friday", "saturday"])
     timezone: str = "Africa/Algiers"
@@ -178,6 +180,32 @@ class WorkSchedulePayload(BaseModel):
     def validate_times(self):
         if self.start_time >= self.end_time:
             raise ValueError("end_time must be after start_time")
+        if self.break_minutes < 0:
+            raise ValueError("break_minutes cannot be negative")
+
+        has_break_start = self.break_start_time is not None
+        has_break_end = self.break_end_time is not None
+        if has_break_start != has_break_end:
+            raise ValueError("break_start_time and break_end_time must both be provided together")
+
+        if self.break_start_time and self.break_end_time:
+            if self.break_start_time <= self.start_time:
+                raise ValueError("break_start_time must be after start_time")
+            if self.break_end_time >= self.end_time:
+                raise ValueError("break_end_time must be before end_time")
+            if self.break_start_time >= self.break_end_time:
+                raise ValueError("break_end_time must be after break_start_time")
+
+            break_start_dt = datetime.combine(date.today(), self.break_start_time)
+            break_end_dt = datetime.combine(date.today(), self.break_end_time)
+            self.break_minutes = int((break_end_dt - break_start_dt).total_seconds() // 60)
+        else:
+            total_shift_minutes = int(
+                (datetime.combine(date.today(), self.end_time) - datetime.combine(date.today(), self.start_time)).total_seconds()
+                // 60
+            )
+            if self.break_minutes >= total_shift_minutes:
+                raise ValueError("break_minutes must be shorter than the scheduled shift")
         return self
 
 

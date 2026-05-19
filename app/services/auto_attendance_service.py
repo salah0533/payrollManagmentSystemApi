@@ -18,6 +18,7 @@ from app.services.attendance_calculation_service import (
     _datetime_for_work_time,
     _scheduled_break_events,
     calculate_attendance_day,
+    process_pending_attendance_notifications,
 )
 from app.services.audit_service import save_audit_log
 from app.services.policy_service import (
@@ -254,12 +255,21 @@ async def run_auto_attendance_loop(interval_seconds: int = AUTO_ATTENDANCE_INTER
         db = SessionLocal()
         try:
             result = process_auto_attendance(db)
+            notification_result = process_pending_attendance_notifications(db)
+            if notification_result["sent"]:
+                db.commit()
             if result["created"] or result["updated"]:
                 logger.info(
                     "Auto attendance processed: created=%s updated=%s skipped_existing_events=%s",
                     result["created"],
                     result["updated"],
                     result["skipped_existing_events"],
+                )
+            if notification_result["sent"]:
+                logger.info(
+                    "Attendance reminders processed: checked=%s sent=%s",
+                    notification_result["checked"],
+                    notification_result["sent"],
                 )
         except asyncio.CancelledError:
             db.rollback()

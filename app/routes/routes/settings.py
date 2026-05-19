@@ -55,7 +55,16 @@ def put_work_schedule(
     current_user: User = Depends(require_permissions("settings.update")),
 ):
     current_schedule = get_default_work_schedule(db)
-    impactful_fields = ("start_time", "end_time", "break_minutes", "weekly_off_days", "timezone", "is_default")
+    impactful_fields = (
+        "start_time",
+        "end_time",
+        "break_start_time",
+        "break_end_time",
+        "break_minutes",
+        "weekly_off_days",
+        "timezone",
+        "is_default",
+    )
     previous_values = {field: getattr(current_schedule, field) for field in impactful_fields}
     schedule = update_default_work_schedule(db, **payload.model_dump())
     if any(previous_values[field] != getattr(schedule, field) for field in impactful_fields):

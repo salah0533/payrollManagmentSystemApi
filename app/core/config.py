@@ -40,6 +40,7 @@ class Settings:
     default_admin_password: str = field(default_factory=lambda: _get_env_str("DEFAULT_ADMIN_PASSWORD", "admin"))
     api_host: str = field(default_factory=lambda: _get_env_str("API_HOST", "127.0.0.1"))
     api_port: int = field(default_factory=lambda: _get_env_int("API_PORT", 8000))
+    api_workers: int = field(default_factory=lambda: _get_env_int("API_WORKERS", 1))
     cors_origins: tuple[str, ...] = field(default_factory=lambda: _get_env_csv("CORS_ORIGINS", ["*"]))
 
 

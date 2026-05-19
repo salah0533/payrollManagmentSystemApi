@@ -27,6 +27,24 @@ ATTENDANCE_EVENT_FIELD_MAP = {
     "check_out": "check_out_time",
 }
 MANUAL_TIME_FIELDS = ("check_in_time", "break_start_time", "break_end_time", "check_out_time")
+ATTENDANCE_REMINDER_MESSAGES = {
+    "attendance_missing_checkin": (
+        "Missing check-in",
+        "Your attendance for {work_date} is missing a check-in.",
+    ),
+    "attendance_missing_break_start": (
+        "Missing break start",
+        "Your attendance for {work_date} is missing a break start.",
+    ),
+    "attendance_missing_break_end": (
+        "Missing break end",
+        "Your attendance for {work_date} is missing a break end.",
+    ),
+    "attendance_missing_checkout": (
+        "Missing check-out",
+        "Your attendance for {work_date} is missing a check-out.",
+    ),
+}
 
 
 def _utc_now() -> datetime:
@@ -60,6 +78,9 @@ def _datetime_for_work_time(work_date: date, work_time: time, schedule_timezone:
 
 
 def _scheduled_break_window(work_date: date, schedule) -> tuple[time | None, time | None]:
+    if getattr(schedule, "break_start_time", None) and getattr(schedule, "break_end_time", None):
+        return schedule.break_start_time, schedule.break_end_time
+
     break_minutes = int(schedule.break_minutes or 0)
     if break_minutes <= 0:
         return None, None
@@ -118,40 +139,6 @@ def _maybe_notify_attendance_issue(
     service = NotificationService(db)
     work_date = day.work_date.isoformat()
 
-    if day.status == "incomplete":
-        if day.check_in_time and not day.check_out_time:
-            notification_type = "attendance_missing_checkout"
-            title = "Missing check-out"
-            message = f"Your attendance for {work_date} is missing a check-out."
-        elif day.check_out_time and not day.check_in_time:
-            notification_type = "attendance_missing_checkin"
-            title = "Missing check-in"
-            message = f"Your attendance for {work_date} is missing a check-in."
-        else:
-            return
-
-        if service.notification_exists(
-            notification_type=notification_type,
-            entity_type="attendance_day",
-            entity_id=day.id,
-            user_id=user.id,
-        ):
-            return
-        service.notify_user(
-            user_id=user.id,
-            notification_type=notification_type,
-            title=title,
-            message=message,
-            title_key=f"notifications.{notification_type}_title",
-            message_key=f"notifications.{notification_type}_message",
-            translation_params={"work_date": work_date},
-            is_system_content=True,
-            entity_type="attendance_day",
-            entity_id=day.id,
-            priority="normal",
-        )
-        return
-
     if day.status == "late" and previous_status != "late":
         if service.notification_exists(
             notification_type="attendance_late",
@@ -173,6 +160,115 @@ def _maybe_notify_attendance_issue(
             entity_id=day.id,
             priority="normal",
         )
+
+
+def _local_now_for_schedule(schedule, now: datetime | None = None) -> datetime:
+    current = _normalize_event_time(now) if now else _utc_now()
+    return current.astimezone(get_schedule_timezone(schedule))
+
+
+def _is_reminder_due(*, work_date: date, trigger_time: time, schedule, now: datetime | None = None) -> bool:
+    local_now = _local_now_for_schedule(schedule, now)
+    if work_date < local_now.date():
+        return True
+    if work_date > local_now.date():
+        return False
+    return local_now.time().replace(tzinfo=None) >= trigger_time
+
+
+def _get_due_attendance_reminder(day: AttendanceDay, schedule, now: datetime | None = None) -> str | None:
+    if day.status != "incomplete":
+        return None
+
+    break_start_time, break_end_time = _scheduled_break_window(day.work_date, schedule)
+
+    if (
+        day.check_in_time
+        and break_start_time
+        and not day.break_start_time
+        and not day.check_out_time
+        and _is_reminder_due(work_date=day.work_date, trigger_time=break_start_time, schedule=schedule, now=now)
+    ):
+        return "attendance_missing_break_start"
+
+    if (
+        day.break_start_time
+        and break_end_time
+        and not day.break_end_time
+        and not day.check_out_time
+        and _is_reminder_due(work_date=day.work_date, trigger_time=break_end_time, schedule=schedule, now=now)
+    ):
+        return "attendance_missing_break_end"
+
+    if (
+        day.check_in_time
+        and not day.check_out_time
+        and _is_reminder_due(work_date=day.work_date, trigger_time=schedule.end_time, schedule=schedule, now=now)
+    ):
+        return "attendance_missing_checkout"
+
+    if (
+        day.check_out_time
+        and not day.check_in_time
+        and _is_reminder_due(work_date=day.work_date, trigger_time=schedule.end_time, schedule=schedule, now=now)
+    ):
+        return "attendance_missing_checkin"
+
+    return None
+
+
+def process_pending_attendance_notifications(db: Session, now: datetime | None = None) -> dict[str, int]:
+    service = NotificationService(db)
+    days = db.scalars(
+        select(AttendanceDay)
+        .options(selectinload(AttendanceDay.employee).selectinload(Employees.user_account))
+        .where(AttendanceDay.status == "incomplete")
+        .order_by(AttendanceDay.work_date.asc(), AttendanceDay.id.asc())
+    ).all()
+
+    counts = {
+        "checked": len(days),
+        "sent": 0,
+    }
+
+    for day in days:
+        employee = day.employee
+        if not employee or not employee.is_active:
+            continue
+
+        user = employee.user_account
+        if not user or user.deleted_at is not None or not user.is_active:
+            continue
+
+        schedule = get_employee_schedule(employee.id, day.work_date, db)
+        notification_type = _get_due_attendance_reminder(day, schedule, now=now)
+        if not notification_type:
+            continue
+        if service.notification_exists(
+            notification_type=notification_type,
+            entity_type="attendance_day",
+            entity_id=day.id,
+            user_id=user.id,
+        ):
+            continue
+
+        title, message_template = ATTENDANCE_REMINDER_MESSAGES[notification_type]
+        service.notify_user(
+            user_id=user.id,
+            notification_type=notification_type,
+            title=title,
+            message=message_template.format(work_date=day.work_date.isoformat()),
+            title_key=f"notifications.{notification_type}_title",
+            message_key=f"notifications.{notification_type}_message",
+            translation_params={"work_date": day.work_date.isoformat()},
+            is_system_content=True,
+            entity_type="attendance_day",
+            entity_id=day.id,
+            priority="normal",
+        )
+        counts["sent"] += 1
+
+    return counts
 
 
 def _get_vacation(employee_id: int, work_date: date, db: Session) -> Vacation | None:

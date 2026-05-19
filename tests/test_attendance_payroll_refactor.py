@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 import app.models  # noqa: F401
 from app.db.base import Base
+from app.models.auth import User
 from app.models.attendance_payroll import (
     AttendanceDay,
     EmployeeCompensation,
@@ -18,9 +19,15 @@ from app.models.attendance_payroll import (
     WorkSchedule,
 )
 from app.models.employees import Employees
+from app.models.notifications import Notification
 from app.models.payment_types import PaymentTypes
 from app.models.salary_type import SalaryType
-from app.services.attendance_calculation_service import apply_smart_attendance_status_correction, create_attendance_event, delete_attendance_day
+from app.services.attendance_calculation_service import (
+    apply_smart_attendance_status_correction,
+    create_attendance_event,
+    delete_attendance_day,
+    process_pending_attendance_notifications,
+)
 from app.services.payroll_calculation_service import (
     approve_employee_payroll,
     calculate_employee_payroll,
@@ -99,6 +106,15 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
             joined=date(2026, 1, 1),
         )
         self.db.add(self.employee)
+        self.db.flush()
+        self.user = User(
+            employee_id=self.employee.id,
+            username="jane-user",
+            password_hash="hash",
+            is_active=True,
+            must_change_password=False,
+        )
+        self.db.add(self.user)
         self.db.commit()
 
     def tearDown(self):
@@ -220,6 +236,79 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(day.late_minutes, 0)
         self.assertEqual(day.status, "present")
         self.assertEqual(day.normal_paid_minutes, 480)
+
+    def test_missing_checkout_notification_waits_until_schedule_end(self):
+        create_attendance_event(
+            self.employee.id,
+            "check_in",
+            datetime(2026, 5, 6, 9, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+
+        early_result = process_pending_attendance_notifications(
+            self.db,
+            now=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+        )
+        self.db.commit()
+
+        self.assertEqual(early_result["sent"], 0)
+        self.assertEqual(self.db.scalars(select(Notification)).all(), [])
+
+        late_result = process_pending_attendance_notifications(
+            self.db,
+            now=datetime(2026, 5, 6, 17, 5, tzinfo=timezone.utc),
+        )
+        self.db.commit()
+        notifications = self.db.scalars(select(Notification).order_by(Notification.created_at.asc())).all()
+
+        self.assertEqual(late_result["sent"], 1)
+        self.assertEqual([item.notification_type for item in notifications], ["attendance_missing_checkout"])
+
+    def test_break_notifications_follow_configured_break_window(self):
+        schedule = self._schedule()
+        schedule.break_start_time = time(12, 0)
+        schedule.break_end_time = time(13, 0)
+        schedule.break_minutes = 60
+        self.db.add(schedule)
+        self.db.commit()
+
+        create_attendance_event(
+            self.employee.id,
+            "check_in",
+            datetime(2026, 5, 7, 9, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+
+        break_start_result = process_pending_attendance_notifications(
+            self.db,
+            now=datetime(2026, 5, 7, 12, 5, tzinfo=timezone.utc),
+        )
+        self.db.commit()
+
+        self.assertEqual(break_start_result["sent"], 1)
+        self.assertEqual(
+            [item.notification_type for item in self.db.scalars(select(Notification).order_by(Notification.created_at.asc())).all()],
+            ["attendance_missing_break_start"],
+        )
+
+        create_attendance_event(
+            self.employee.id,
+            "break_start",
+            datetime(2026, 5, 7, 12, 10, tzinfo=timezone.utc),
+            self.db,
+        )
+        break_end_result = process_pending_attendance_notifications(
+            self.db,
+            now=datetime(2026, 5, 7, 13, 5, tzinfo=timezone.utc),
+        )
+        self.db.commit()
+        notifications = self.db.scalars(select(Notification).order_by(Notification.created_at.asc())).all()
+
+        self.assertEqual(break_end_result["sent"], 1)
+        self.assertEqual(
+            [item.notification_type for item in notifications],
+            ["attendance_missing_break_start", "attendance_missing_break_end"],
+        )
 
     def test_smart_correction_after_payroll_approval_creates_discrepancy(self):
         work_date = date(2026, 5, 7)

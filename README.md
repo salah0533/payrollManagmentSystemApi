@@ -46,6 +46,7 @@ DEFAULT_ADMIN_EMAIL=admin@example.com
 DEFAULT_ADMIN_PASSWORD=admin
 API_HOST=127.0.0.1
 API_PORT=8000
+API_WORKERS=1
 CORS_ORIGINS=*
 ```
 
@@ -61,8 +62,9 @@ Environment variables:
 - `DEFAULT_ADMIN_USERNAME`: seeded admin username.
 - `DEFAULT_ADMIN_EMAIL`: seeded admin email.
 - `DEFAULT_ADMIN_PASSWORD`: seeded admin password for first-run development.
-- `API_HOST`: backend bind address for `python -m app.run`.
-- `API_PORT`: backend bind port for `python -m app.run`.
+- `API_HOST`: backend bind address for the backend launchers.
+- `API_PORT`: backend bind port for the backend launchers.
+- `API_WORKERS`: worker count used by `python -m app.run_prod`.
 - `CORS_ORIGINS`: comma-separated allowed frontend origins, or `*` for unrestricted development.
 
 ### 4. Run database migrations
@@ -96,7 +98,15 @@ The seed is safe to run multiple times.
 ### 6. Start the development server
 
 ```bash
-python -m app.run
+python -m app.run_dev
+```
+
+`python -m app.run` remains available as a compatibility alias for the same development launcher.
+
+### 7. Start the production-style server
+
+```bash
+python -m app.run_prod
 ```
 
 ## First-Run Command Order
@@ -106,7 +116,7 @@ Use this order on a fresh setup:
 ```bash
 alembic upgrade head
 python -m app.scripts.seed_initial_data
-python -m app.run
+python -m app.run_dev
 ```
 
 ## Re-running the Seed

@@ -21,6 +21,12 @@ class SettingsConfigTests(unittest.TestCase):
 
         self.assertEqual(settings.api_port, 9001)
 
+    def test_api_workers_is_parsed_from_environment(self):
+        with patch.dict(os.environ, {"API_WORKERS": "4"}, clear=True):
+            settings = Settings()
+
+        self.assertEqual(settings.api_workers, 4)
+
     def test_cors_origins_are_split_and_trimmed(self):
         with patch.dict(
             os.environ,

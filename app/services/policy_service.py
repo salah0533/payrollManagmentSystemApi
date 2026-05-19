@@ -40,6 +40,55 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _minutes_between_times(start_value: time, end_value: time) -> int:
+    start_dt = datetime.combine(date.today(), start_value)
+    end_dt = datetime.combine(date.today(), end_value)
+    return max(0, int((end_dt - start_dt).total_seconds() // 60))
+
+
+def _derive_break_window(start_time: time, end_time: time, break_minutes: int) -> tuple[time | None, time | None]:
+    minutes = max(0, int(break_minutes or 0))
+    if minutes <= 0:
+        return None, None
+
+    scheduled_minutes = _minutes_between_times(start_time, end_time)
+    if scheduled_minutes <= minutes:
+        return None, None
+
+    break_start_offset = max(0, (scheduled_minutes - minutes) // 2)
+    break_start = datetime.combine(date.today(), start_time) + timedelta(minutes=break_start_offset)
+    break_end = break_start + timedelta(minutes=minutes)
+    return break_start.time(), break_end.time()
+
+
+def _ensure_work_schedule_schema(db: Session) -> None:
+    inspector = inspect(db.connection())
+    if not inspector.has_table("work_schedule"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("work_schedule")}
+    if "break_start_time" not in existing_columns:
+        db.execute(text("ALTER TABLE work_schedule ADD COLUMN break_start_time TIME"))
+    if "break_end_time" not in existing_columns:
+        db.execute(text("ALTER TABLE work_schedule ADD COLUMN break_end_time TIME"))
+    db.flush()
+
+    schedules = db.scalars(select(WorkSchedule)).all()
+    for schedule in schedules:
+        if schedule.break_start_time or schedule.break_end_time:
+            continue
+        break_start_time, break_end_time = _derive_break_window(
+            schedule.start_time,
+            schedule.end_time,
+            int(schedule.break_minutes or 0),
+        )
+        if break_start_time and break_end_time:
+            schedule.break_start_time = break_start_time
+            schedule.break_end_time = break_end_time
+            db.add(schedule)
+    db.flush()
+
+
 def _ensure_payroll_policy_schema(db: Session) -> None:
     inspector = inspect(db.connection())
     if not inspector.has_table("payroll_policy"):
@@ -152,6 +201,7 @@ def update_payroll_policy(db: Session, **values) -> PayrollPolicy:
 
 
 def get_employee_schedule(employee_id: int, target_date: date, db: Session) -> WorkSchedule:
+    _ensure_work_schedule_schema(db)
     schedule = db.scalar(
         select(WorkSchedule)
         .where(WorkSchedule.is_default.is_(True))
@@ -167,10 +217,17 @@ def get_employee_schedule(employee_id: int, target_date: date, db: Session) -> W
         name="Default Schedule",
         start_time=start_time,
         end_time=end_time,
+        break_start_time=None,
+        break_end_time=None,
         break_minutes=60,
         weekly_off_days=["friday", "saturday"],
         timezone="Africa/Algiers",
         is_default=True,
+    )
+    schedule.break_start_time, schedule.break_end_time = _derive_break_window(
+        schedule.start_time,
+        schedule.end_time,
+        schedule.break_minutes,
     )
     db.add(schedule)
     db.flush()
@@ -178,6 +235,7 @@ def get_employee_schedule(employee_id: int, target_date: date, db: Session) -> W
 
 
 def get_default_work_schedule(db: Session) -> WorkSchedule:
+    _ensure_work_schedule_schema(db)
     return get_employee_schedule(0, date.today(), db)
 
 
@@ -203,6 +261,14 @@ def update_default_work_schedule(db: Session, **values) -> WorkSchedule:
 
     for key, value in values.items():
         setattr(schedule, key, value)
+    if schedule.break_start_time and schedule.break_end_time:
+        schedule.break_minutes = _minutes_between_times(schedule.break_start_time, schedule.break_end_time)
+    elif not schedule.break_start_time and not schedule.break_end_time:
+        schedule.break_start_time, schedule.break_end_time = _derive_break_window(
+            schedule.start_time,
+            schedule.end_time,
+            int(schedule.break_minutes or 0),
+        )
     schedule.updated_at = _utc_now()
     db.add(schedule)
     db.flush()
