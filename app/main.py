@@ -1,6 +1,7 @@
 import asyncio
 
 from fastapi import FastAPI, Request
+from app.core.config import settings
 from app.routes.router import routers
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -18,9 +19,7 @@ configure_logging()
 app = FastAPI()
 
 
-origins = [
-"*"
-]
+origins = list(settings.cors_origins)
 
 app.add_middleware(
     CORSMiddleware,

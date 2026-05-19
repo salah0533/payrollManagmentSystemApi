@@ -45,7 +45,7 @@ It also seeds:
 ```bash
 alembic upgrade head
 python -m app.scripts.seed_initial_data
-uvicorn app.main:app --reload
+python -m app.run
 ```
 
 ## Safe Rerun
@@ -95,3 +95,21 @@ Important:
 - The password is hashed before being stored.
 - The account is seeded with `must_change_password = true`.
 - Change the default admin password immediately after first login.
+
+## Runtime Environment
+
+Configure the backend in `.env`:
+
+- `DATABASE_URL`
+- `JWT_SECRET_KEY`
+- `JWT_ALGORITHM`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `REFRESH_TOKEN_EXPIRE_MINUTES`
+- `DEFAULT_ADMIN_USERNAME`
+- `DEFAULT_ADMIN_EMAIL`
+- `DEFAULT_ADMIN_PASSWORD`
+- `API_HOST`
+- `API_PORT`
+- `CORS_ORIGINS`
+
+`CORS_ORIGINS` accepts a comma-separated list such as `http://localhost:3000,http://127.0.0.1:8080`.

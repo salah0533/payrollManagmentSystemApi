@@ -36,10 +36,34 @@ Create a `.env` file in the project root.
 Example:
 
 ```env
-DATABASE_URL = sqlite:///./app.db
+DATABASE_URL=sqlite:///./app.db
+JWT_SECRET_KEY=change-me-in-production
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+REFRESH_TOKEN_EXPIRE_MINUTES=10080
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_EMAIL=admin@example.com
+DEFAULT_ADMIN_PASSWORD=admin
+API_HOST=127.0.0.1
+API_PORT=8000
+CORS_ORIGINS=*
 ```
 
-You can also copy the value from `.env-example`.
+You can also copy the values from `.env.example`.
+
+Environment variables:
+
+- `DATABASE_URL`: SQLAlchemy connection string.
+- `JWT_SECRET_KEY`: signing key for JWT tokens.
+- `JWT_ALGORITHM`: JWT signing algorithm.
+- `ACCESS_TOKEN_EXPIRE_MINUTES`: access token lifetime in minutes.
+- `REFRESH_TOKEN_EXPIRE_MINUTES`: refresh token lifetime in minutes.
+- `DEFAULT_ADMIN_USERNAME`: seeded admin username.
+- `DEFAULT_ADMIN_EMAIL`: seeded admin email.
+- `DEFAULT_ADMIN_PASSWORD`: seeded admin password for first-run development.
+- `API_HOST`: backend bind address for `python -m app.run`.
+- `API_PORT`: backend bind port for `python -m app.run`.
+- `CORS_ORIGINS`: comma-separated allowed frontend origins, or `*` for unrestricted development.
 
 ### 4. Run database migrations
 
@@ -72,7 +96,7 @@ The seed is safe to run multiple times.
 ### 6. Start the development server
 
 ```bash
-uvicorn app.main:app --reload
+python -m app.run
 ```
 
 ## First-Run Command Order
@@ -82,7 +106,7 @@ Use this order on a fresh setup:
 ```bash
 alembic upgrade head
 python -m app.scripts.seed_initial_data
-uvicorn app.main:app --reload
+python -m app.run
 ```
 
 ## Re-running the Seed
