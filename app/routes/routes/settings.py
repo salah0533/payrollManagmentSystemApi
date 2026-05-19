@@ -114,6 +114,7 @@ def put_payroll_policy(
         "overtime_enabled",
         "late_makeup_enabled",
         "late_deduction_enabled",
+        "monthly_payroll_calculation_mode",
         "auto_recalculate_draft_payroll",
         "lock_payroll_after_payment",
     )

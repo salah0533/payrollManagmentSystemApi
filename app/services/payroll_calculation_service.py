@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.exceptions.base_exception import BadRequestException, ResourceNotFoundException
 from app.models.attendance_payroll import (
     AttendanceDay,
+    DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
     EmployeePayroll,
+    MONTHLY_PAYROLL_CALCULATION_MODE_CALENDAR_DAYS,
+    MONTHLY_PAYROLL_CALCULATION_MODE_WORKING_DAYS,
     PayrollAdjustment,
     PayrollCalculationHistory,
     PayrollDiscrepancy,
@@ -124,9 +127,28 @@ def _apply_payroll_snapshot_fields(payroll: EmployeePayroll, calculation_data_js
     return payroll
 
 
-def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_day_minutes: int, working_days_count: int) -> dict[str, object]:
-    period_expected_minutes = working_days_count * expected_day_minutes
-    auto_daily_rate = _divide_decimal(base_monthly_salary, Decimal(working_days_count)) if working_days_count else Decimal("0.00")
+def _normalize_monthly_payroll_calculation_mode(value: str | None) -> str:
+    normalized = (value or DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE).strip().lower()
+    if normalized not in {
+        MONTHLY_PAYROLL_CALCULATION_MODE_WORKING_DAYS,
+        MONTHLY_PAYROLL_CALCULATION_MODE_CALENDAR_DAYS,
+    }:
+        return DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE
+    return normalized
+
+
+def _expand_date_range(start_date: date, end_date: date) -> list[date]:
+    current = start_date
+    result: list[date] = []
+    while current <= end_date:
+        result.append(current)
+        current += timedelta(days=1)
+    return result
+
+
+def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_day_minutes: int, basis_days_count: int) -> dict[str, object]:
+    period_expected_minutes = basis_days_count * expected_day_minutes
+    auto_daily_rate = _divide_decimal(base_monthly_salary, Decimal(basis_days_count)) if basis_days_count else Decimal("0.00")
     auto_hourly_rate = _divide_decimal(base_monthly_salary * Decimal("60"), Decimal(period_expected_minutes)) if period_expected_minutes else Decimal("0.00")
     auto_minute_rate = _divide_decimal(base_monthly_salary, Decimal(period_expected_minutes)) if period_expected_minutes else Decimal("0.00")
 
@@ -185,7 +207,7 @@ def _resolve_monthly_rates(compensation, base_monthly_salary: Decimal, expected_
             )
 
     return {
-        "working_days_count": working_days_count,
+        "basis_days_count": basis_days_count,
         "period_expected_minutes": period_expected_minutes,
         "auto_daily_rate": auto_daily_rate,
         "auto_hourly_rate": auto_hourly_rate,
@@ -427,6 +449,9 @@ def _load_adjustments(employee_payroll_id: int, db: Session) -> list[PayrollAdju
 
 def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: PayrollPeriod, days: list[AttendanceDay], db: Session):
     policy = get_or_create_payroll_policy(db)
+    monthly_payroll_calculation_mode = _normalize_monthly_payroll_calculation_mode(
+        getattr(policy, "monthly_payroll_calculation_mode", None)
+    )
     schedule = get_employee_schedule(payroll.employee_id, period.start_date, db)
     compensation = get_employee_compensation(payroll.employee_id, period.end_date, db)
     holidays = get_employee_holiday_dates(payroll.employee_id, period.start_date, period.end_date, db)
@@ -442,6 +467,12 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         if accrual_window
         else []
     )
+    if monthly_payroll_calculation_mode == MONTHLY_PAYROLL_CALCULATION_MODE_CALENDAR_DAYS:
+        full_period_basis_days = _expand_date_range(period.start_date, period.end_date)
+        accrued_basis_days = _expand_date_range(accrual_window[0], accrual_window[1]) if accrual_window else []
+    else:
+        full_period_basis_days = full_period_working_days
+        accrued_basis_days = accrued_working_days
     expected_day_minutes = max(
         1,
         _minutes_between_times(schedule.start_time, schedule.end_time) - int(schedule.break_minutes or 0),
@@ -466,7 +497,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         compensation,
         base_monthly_salary=base_monthly_salary,
         expected_day_minutes=expected_day_minutes,
-        working_days_count=len(full_period_working_days),
+        basis_days_count=len(full_period_basis_days),
     )
 
     recorded_dates = {item.work_date for item in accrued_days}
@@ -480,7 +511,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     )
     review_held_paid_minutes = sum(_int(day.normal_paid_minutes) for day in tiny_review_days)
     full_period_expected_minutes = _int(resolved_rates["period_expected_minutes"])
-    period_expected_minutes = len(accrued_working_days) * expected_day_minutes
+    period_expected_minutes = len(accrued_basis_days) * expected_day_minutes
     earned_unpaid_minutes = min(period_expected_minutes, max(0, _int(summary["unpaid_minutes"]) + missing_workday_minutes))
     earned_paid_minutes = max(0, period_expected_minutes - earned_unpaid_minutes)
     raw_unpaid_minutes = earned_unpaid_minutes + review_held_paid_minutes
@@ -531,8 +562,11 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
 
     calc_data = {
         **summary,
+        "monthly_payroll_calculation_mode": monthly_payroll_calculation_mode,
         "working_days_count": len(accrued_working_days),
-        "full_period_working_days_count": resolved_rates["working_days_count"],
+        "full_period_working_days_count": len(full_period_working_days),
+        "payroll_basis_days_count": len(accrued_basis_days),
+        "full_period_payroll_basis_days_count": resolved_rates["basis_days_count"],
         "expected_day_minutes": expected_day_minutes,
         "period_expected_minutes": period_expected_minutes,
         "full_period_expected_minutes": full_period_expected_minutes,

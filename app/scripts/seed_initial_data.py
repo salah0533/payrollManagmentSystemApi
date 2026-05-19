@@ -206,6 +206,7 @@ def seed_payroll_reference_data(db: Session):
                 "overtime_enabled": True,
                 "late_makeup_enabled": True,
                 "late_deduction_enabled": False,
+                "monthly_payroll_calculation_mode": "calendar_days",
                 "auto_recalculate_draft_payroll": True,
                 "lock_payroll_after_payment": True,
                 "holidays_json": [],

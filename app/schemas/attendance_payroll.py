@@ -5,6 +5,10 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.models.attendance_payroll import (
+    DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
+    MONTHLY_PAYROLL_CALCULATION_MODES,
+)
 from app.utility.reference_codes import ATTENDANCE_EVENT_TYPE_CODES, PAYROLL_ADJUSTMENT_TYPE_CODES
 
 ATTENDANCE_EVENT_TYPES = set(ATTENDANCE_EVENT_TYPE_CODES)
@@ -229,6 +233,7 @@ class PayrollPolicyPayload(BaseModel):
     overtime_enabled: bool = True
     late_makeup_enabled: bool = True
     late_deduction_enabled: bool = False
+    monthly_payroll_calculation_mode: str = DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE
     auto_recalculate_draft_payroll: bool = True
     lock_payroll_after_payment: bool = True
     annual_vacation_days_by_year: dict[str, int] = Field(default_factory=dict)
@@ -246,6 +251,16 @@ class PayrollPolicyPayload(BaseModel):
             raise ValueError("default_currency is not allowed")
         if len(normalized) != 3 or not normalized.isalpha():
             raise ValueError("default_currency must be a 3-letter ISO currency code")
+        return normalized
+
+    @field_validator("monthly_payroll_calculation_mode")
+    @classmethod
+    def validate_monthly_payroll_calculation_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in MONTHLY_PAYROLL_CALCULATION_MODES:
+            raise ValueError(
+                f"monthly_payroll_calculation_mode must be one of {sorted(MONTHLY_PAYROLL_CALCULATION_MODES)}"
+            )
         return normalized
 
     @field_validator("annual_vacation_days_by_year", mode="before")

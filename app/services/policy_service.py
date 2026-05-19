@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.exceptions.base_exception import ResourceNotFoundException
 from app.models.attendance_payroll import EmployeeCompensation, PayrollPolicy, WorkSchedule
+from app.models.attendance_payroll import (
+    DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
+    MONTHLY_PAYROLL_CALCULATION_MODES,
+)
 from app.models.employees import Employees
 from app.models.settings import Settings
 from app.models.types.vacationStatus import VacationStatuses
@@ -41,6 +45,13 @@ def _decimal(value, default: str = "0.00") -> Decimal:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_monthly_payroll_calculation_mode(value: str | None) -> str:
+    normalized = (value or DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE).strip().lower()
+    if normalized not in MONTHLY_PAYROLL_CALCULATION_MODES:
+        return DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE
+    return normalized
 
 
 def _minutes_between_times(start_value: time, end_value: time) -> int:
@@ -147,6 +158,13 @@ def _ensure_payroll_policy_schema(db: Session) -> None:
                 "ADD COLUMN reserve_vacation_days_on_pending BOOLEAN NOT NULL DEFAULT 0"
             )
         )
+    if "monthly_payroll_calculation_mode" not in existing_columns:
+        db.execute(
+            text(
+                "ALTER TABLE payroll_policy "
+                "ADD COLUMN monthly_payroll_calculation_mode VARCHAR(20) NOT NULL DEFAULT 'calendar_days'"
+            )
+        )
 
 
 def get_schedule_timezone(schedule: WorkSchedule) -> tzinfo:
@@ -164,6 +182,14 @@ def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
     _ensure_payroll_policy_schema(db)
     policy = db.scalar(select(PayrollPolicy).order_by(PayrollPolicy.id))
     if policy:
+        normalized_mode = _normalize_monthly_payroll_calculation_mode(
+            getattr(policy, "monthly_payroll_calculation_mode", None)
+        )
+        if getattr(policy, "monthly_payroll_calculation_mode", None) != normalized_mode:
+            policy.monthly_payroll_calculation_mode = normalized_mode
+            policy.updated_at = _utc_now()
+            db.add(policy)
+            db.flush()
         return policy
 
     policy = PayrollPolicy(
@@ -178,6 +204,7 @@ def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
         overtime_enabled=True,
         late_makeup_enabled=True,
         late_deduction_enabled=False,
+        monthly_payroll_calculation_mode=DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
         auto_recalculate_draft_payroll=True,
         lock_payroll_after_payment=True,
         holidays_json=[],
@@ -195,6 +222,10 @@ def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
 
 def update_payroll_policy(db: Session, **values) -> PayrollPolicy:
     policy = get_or_create_payroll_policy(db)
+    if "monthly_payroll_calculation_mode" in values:
+        values["monthly_payroll_calculation_mode"] = _normalize_monthly_payroll_calculation_mode(
+            values["monthly_payroll_calculation_mode"]
+        )
     for key, value in values.items():
         setattr(policy, key, value)
     policy.updated_at = _utc_now()

@@ -5,6 +5,14 @@ from sqlalchemy.orm import relationship
 
 from app.db.base import Base
 
+MONTHLY_PAYROLL_CALCULATION_MODE_WORKING_DAYS = "working_days"
+MONTHLY_PAYROLL_CALCULATION_MODE_CALENDAR_DAYS = "calendar_days"
+MONTHLY_PAYROLL_CALCULATION_MODES = (
+    MONTHLY_PAYROLL_CALCULATION_MODE_WORKING_DAYS,
+    MONTHLY_PAYROLL_CALCULATION_MODE_CALENDAR_DAYS,
+)
+DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE = MONTHLY_PAYROLL_CALCULATION_MODE_CALENDAR_DAYS
+
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -67,6 +75,11 @@ class PayrollPolicy(Base):
     overtime_enabled = Column(Boolean, nullable=False, default=True)
     late_makeup_enabled = Column(Boolean, nullable=False, default=True)
     late_deduction_enabled = Column(Boolean, nullable=False, default=False)
+    monthly_payroll_calculation_mode = Column(
+        String(20),
+        nullable=False,
+        default=DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
+    )
     auto_recalculate_draft_payroll = Column(Boolean, nullable=False, default=True)
     lock_payroll_after_payment = Column(Boolean, nullable=False, default=True)
     holidays_json = Column(JSON, nullable=False, default=list)

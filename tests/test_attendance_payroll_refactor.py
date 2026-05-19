@@ -1,6 +1,8 @@
 import unittest
+import json
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
@@ -24,7 +26,9 @@ from app.models.employees import Employees
 from app.models.notifications import Notification
 from app.models.payment_types import PaymentTypes
 from app.models.salary_type import SalaryType
+from app.routes.routes.settings import put_payroll_policy
 from app.schemas.attendance_payroll import AttendanceCorrectionRequest
+from app.schemas.attendance_payroll import PayrollPolicyPayload
 from app.services.attendance_calculation_service import (
     apply_smart_attendance_status_correction,
     calculate_attendance_day,
@@ -81,6 +85,7 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
                     overtime_enabled=True,
                     late_makeup_enabled=True,
                     late_deduction_enabled=False,
+                    monthly_payroll_calculation_mode="working_days",
                     auto_recalculate_draft_payroll=True,
                     lock_payroll_after_payment=True,
                     holidays_json=[],
@@ -1046,6 +1051,129 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(results["attendance_deduction_amount"], Decimal("0.00"))
         self.assertEqual(results["net_salary"], expected_net_salary)
         self.assertEqual(results["total_amount"], expected_net_salary)
+
+    def test_calendar_days_mode_uses_full_month_calendar_denominator(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        policy = self._policy()
+        policy.monthly_payroll_calculation_mode = "calendar_days"
+        self.db.add(policy)
+        self.db.flush()
+        absence_date = date(2026, 5, 3)
+        days = self._month_days(absent_dates={absence_date})
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertEqual(results["calculation_data_json"]["monthly_payroll_calculation_mode"], "calendar_days")
+        self.assertEqual(results["calculation_data_json"]["working_days_count"], 21)
+        self.assertEqual(results["calculation_data_json"]["payroll_basis_days_count"], 31)
+        self.assertEqual(results["calculation_data_json"]["period_expected_minutes"], 14880)
+        self.assertEqual(results["calculation_data_json"]["full_period_payroll_basis_days_count"], 31)
+        self.assertEqual(results["calculation_data_json"]["auto_minute_rate"], "5.712365591397849462365591398")
+        self.assertEqual(results["attendance_deduction_amount"], Decimal("2741.94"))
+        self.assertEqual(results["net_salary"], Decimal("82258.06"))
+
+    def test_calendar_days_mode_treats_weekly_off_rows_as_paid_without_deduction(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        policy = self._policy()
+        policy.monthly_payroll_calculation_mode = "calendar_days"
+        self.db.add(policy)
+        self.db.flush()
+        days = self._month_days()
+        weekly_off_date = date(2026, 5, 1)
+        days.append(
+            AttendanceDay(
+                employee_id=self.employee.id,
+                work_date=weekly_off_date,
+                expected_work_minutes=0,
+                actual_work_minutes=0,
+                normal_paid_minutes=0,
+                late_minutes=0,
+                early_leave_minutes=0,
+                late_makeup_minutes=0,
+                overtime_minutes=0,
+                absence_minutes=0,
+                unpaid_minutes=0,
+                status="weekly_off",
+                review_status="approved",
+            )
+        )
+
+        results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        self.assertEqual(days[-1].status, "weekly_off")
+        self.assertEqual(results["calculation_data_json"]["missing_attendance_days"], 0)
+        self.assertEqual(results["attendance_deduction_amount"], Decimal("0.00"))
+        self.assertEqual(results["net_salary"], Decimal("85000.00"))
+
+    def test_current_period_calendar_days_mode_accrues_through_cutoff_date(self):
+        period = self._payroll_period_for_month(2026, 5)
+        payroll = self._payroll_stub(period)
+        policy = self._policy()
+        policy.monthly_payroll_calculation_mode = "calendar_days"
+        self.db.add(policy)
+        self.db.flush()
+        cutoff = date(2026, 5, 19)
+        days = [day for day in self._month_days() if day.work_date <= cutoff]
+
+        with patch("app.services.payroll_calculation_service._today", return_value=cutoff):
+            results = calculate_monthly_employee_payroll(payroll, period, days, self.db)
+
+        expected_period_minutes = 19 * 480
+        expected_net_salary = (Decimal("85000.00") * Decimal("19") / Decimal("31")).quantize(Decimal("0.01"))
+
+        self.assertEqual(results["calculation_data_json"]["monthly_payroll_calculation_mode"], "calendar_days")
+        self.assertEqual(results["calculation_data_json"]["effective_cutoff_date"], "2026-05-19")
+        self.assertEqual(results["calculation_data_json"]["working_days_count"], 13)
+        self.assertEqual(results["calculation_data_json"]["payroll_basis_days_count"], 19)
+        self.assertEqual(results["calculation_data_json"]["period_expected_minutes"], expected_period_minutes)
+        self.assertEqual(results["attendance_deduction_amount"], Decimal("0.00"))
+        self.assertEqual(results["net_salary"], expected_net_salary)
+        self.assertEqual(results["total_amount"], expected_net_salary)
+
+    def test_switching_payroll_mode_through_settings_triggers_reconciliation(self):
+        policy = self._policy()
+        payload = PayrollPolicyPayload(
+            name=policy.name,
+            payroll_cycle=policy.payroll_cycle,
+            minimum_overtime_minutes=policy.minimum_overtime_minutes,
+            minimum_auto_pay_minutes=policy.minimum_auto_pay_minutes,
+            allowed_late_minutes=policy.allowed_late_minutes,
+            default_currency=policy.default_currency,
+            significant_change_threshold=Decimal(str(policy.significant_change_threshold)),
+            paid_vacation_counts_for_daily=policy.paid_vacation_counts_for_daily,
+            overtime_enabled=policy.overtime_enabled,
+            late_makeup_enabled=policy.late_makeup_enabled,
+            late_deduction_enabled=policy.late_deduction_enabled,
+            monthly_payroll_calculation_mode="calendar_days",
+            auto_recalculate_draft_payroll=policy.auto_recalculate_draft_payroll,
+            lock_payroll_after_payment=policy.lock_payroll_after_payment,
+            annual_vacation_days_by_year=policy.annual_vacation_days_by_year or {},
+            allow_vacation_carryover=policy.allow_vacation_carryover,
+            max_vacation_carryover_days=policy.max_vacation_carryover_days,
+            carryover_expiry_month=policy.carryover_expiry_month,
+            carryover_expiry_day=policy.carryover_expiry_day,
+            reserve_vacation_days_on_pending=policy.reserve_vacation_days_on_pending,
+        )
+
+        with patch(
+            "app.services.payroll_calculation_service.reconcile_existing_payrolls_for_settings_change"
+        ) as reconcile_mock:
+            response = put_payroll_policy(
+                payload=payload,
+                db=self.db,
+                current_user=SimpleNamespace(id=99),
+            )
+
+        response_payload = json.loads(response.body)
+        self.assertTrue(response_payload["status"])
+        reconcile_mock.assert_called_once_with(
+            self.db,
+            reason="payroll_policy_updated",
+            created_by=99,
+        )
+        self.assertEqual(self._policy().monthly_payroll_calculation_mode, "calendar_days")
 
     def test_current_period_discrepancy_detection_ignores_future_missing_attendance(self):
         period = self._payroll_period_for_month(2026, 5)
