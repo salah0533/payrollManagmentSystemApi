@@ -73,8 +73,8 @@ def _local_now(schedule, now: datetime | None = None) -> datetime:
     return current.astimezone(get_schedule_timezone(schedule))
 
 
-def _has_shift_completed(local_now: datetime, schedule) -> bool:
-    return local_now.time().replace(tzinfo=None) >= schedule.end_time
+def _has_auto_attendance_start_arrived(local_now: datetime, schedule) -> bool:
+    return local_now.time().replace(tzinfo=None) >= schedule.start_time
 
 
 def _is_schedule_workday(work_date: date, schedule, holidays: set[date]) -> bool:
@@ -101,7 +101,7 @@ def resolve_auto_attendance_effective_from(employee_id: int, db: Session, now: d
     schedule = get_default_work_schedule(db)
     local_now = _local_now(schedule, now)
     candidate = local_now.date()
-    if _has_shift_completed(local_now, schedule):
+    if _has_auto_attendance_start_arrived(local_now, schedule):
         candidate += timedelta(days=1)
 
     while True:
@@ -111,9 +111,9 @@ def resolve_auto_attendance_effective_from(employee_id: int, db: Session, now: d
         candidate += timedelta(days=1)
 
 
-def _latest_completed_work_date(schedule, now: datetime | None = None) -> date:
+def _latest_auto_attendance_work_date(schedule, now: datetime | None = None) -> date:
     local_now = _local_now(schedule, now)
-    if _has_shift_completed(local_now, schedule):
+    if _has_auto_attendance_start_arrived(local_now, schedule):
         return local_now.date()
     return local_now.date() - timedelta(days=1)
 
@@ -207,7 +207,7 @@ def apply_auto_attendance_for_day(employee: Employees, work_date: date, schedule
 
 def process_auto_attendance(db: Session, now: datetime | None = None) -> dict[str, int]:
     schedule = get_default_work_schedule(db)
-    latest_completed = _latest_completed_work_date(schedule, now)
+    latest_due = _latest_auto_attendance_work_date(schedule, now)
     employees = db.scalars(
         select(Employees)
         .where(
@@ -232,10 +232,10 @@ def process_auto_attendance(db: Session, now: datetime | None = None) -> dict[st
 
     for employee in employees:
         cursor = employee.auto_attendance_effective_from
-        if cursor is None or cursor > latest_completed:
+        if cursor is None or cursor > latest_due:
             continue
 
-        while cursor <= latest_completed:
+        while cursor <= latest_due:
             holidays = set(get_employee_holiday_dates(employee.id, cursor, cursor, db))
             result = apply_auto_attendance_for_day(employee, cursor, schedule, holidays, db)
             counts[result] = counts.get(result, 0) + 1
