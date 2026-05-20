@@ -236,7 +236,14 @@ def _set_attendance_review_status_for_period(employee_id: int, period: PayrollPe
     for day in days:
         day.review_status = review_status
         if review_status == "locked":
+            day.reviewed_at = _utc_now()
             day.locked_at = _utc_now()
+        elif review_status == "approved":
+            day.reviewed_at = _utc_now()
+            day.locked_at = None
+        else:
+            day.reviewed_at = None
+            day.locked_at = None
         db.add(day)
 
 
@@ -1230,6 +1237,20 @@ def _has_payroll_adjustments(employee_payroll_id: int, db: Session) -> bool:
     ) is not None
 
 
+def _latest_non_settlement_payroll_snapshot(employee_payroll_id: int, db: Session) -> dict:
+    history = db.scalar(
+        select(PayrollCalculationHistory.calculation_data_json)
+        .where(
+            PayrollCalculationHistory.employee_payroll_id == employee_payroll_id,
+            ~PayrollCalculationHistory.reason.in_(
+                ("payroll_approved", "payroll_payment_recorded", "payroll_unapproved", "payroll_reopened")
+            ),
+        )
+        .order_by(PayrollCalculationHistory.created_at.desc(), PayrollCalculationHistory.id.desc())
+    )
+    return history or {}
+
+
 def _delete_auto_payroll(payroll: EmployeePayroll, db: Session) -> None:
     db.execute(
         delete(PayrollCalculationHistory)
@@ -1436,6 +1457,163 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
             "held_for_review_amount": "0.00",
         },
     )
+    return payroll
+
+
+def unapprove_employee_payroll(employee_payroll_id: int, db: Session, unapproved_by: int | None = None):
+    payroll = db.scalar(
+        select(EmployeePayroll)
+        .options(selectinload(EmployeePayroll.discrepancies))
+        .where(EmployeePayroll.id == employee_payroll_id)
+    )
+    if not payroll:
+        raise ResourceNotFoundException("Employee payroll")
+
+    if payroll.status != "approved":
+        raise BadRequestException("Only approved payroll can have approval removed")
+
+    if _decimal(payroll.paid_amount) > Decimal("0.00") or _has_payroll_payments(payroll.id, db):
+        raise BadRequestException("Approval cannot be removed after payroll payments have been recorded")
+
+    old_status = payroll.status
+    old_approved_at = payroll.approved_at
+    base_snapshot = _latest_non_settlement_payroll_snapshot(payroll.id, db)
+    open_items = detect_payroll_discrepancies(payroll.employee_id, payroll.payroll_period_id, db)
+    payable_amount = _money(_decimal(base_snapshot.get("payable_amount"), default=str(_decimal(payroll.net_salary))))
+
+    payroll.status = "needs_review" if any(item.status == "open" for item in open_items) or (base_snapshot.get("needs_review_reasons") or []) else "draft"
+    payroll.approved_at = None
+    _sync_payroll_balance(payroll, payable_amount=payable_amount)
+
+    create_payroll_history_snapshot(
+        payroll,
+        old_gross_salary=_decimal(payroll.gross_salary),
+        old_net_salary=_decimal(payroll.net_salary),
+        reason="payroll_unapproved",
+        calculation_data_json={
+            **base_snapshot,
+            "status_before": old_status,
+            "status_after": payroll.status,
+            "payable_amount": str(payable_amount),
+        },
+        db=db,
+        created_by=unapproved_by,
+    )
+    save_audit_log(
+        db,
+        action="payroll_unapproved",
+        entity_type="EmployeePayroll",
+        entity_id=payroll.id,
+        old_data_json={"status": old_status, "approved_at": str(old_approved_at) if old_approved_at else None},
+        new_data_json={"status": payroll.status, "approved_at": None},
+        user_id=unapproved_by,
+    )
+    db.commit()
+    db.refresh(payroll)
+    _apply_payroll_snapshot_fields(payroll, base_snapshot)
+    return payroll
+
+
+def reopen_locked_employee_payroll(
+    employee_payroll_id: int,
+    db: Session,
+    reopened_by: int | None = None,
+    reason: str | None = None,
+):
+    payroll = db.get(EmployeePayroll, employee_payroll_id)
+    if not payroll:
+        raise ResourceNotFoundException("Employee payroll")
+
+    if payroll.status != "locked":
+        raise BadRequestException("Only locked payroll can be reopened")
+
+    reversal_reason = (reason or "").strip()
+    if not reversal_reason:
+        raise BadRequestException("A reopen reason is required")
+
+    reversed_amount = _money(_decimal(payroll.paid_amount))
+    if reversed_amount <= Decimal("0.00"):
+        raise BadRequestException("Locked payroll has no paid amount to reverse")
+
+    old_status = payroll.status
+    old_paid_amount = _decimal(payroll.paid_amount)
+    old_balance_amount = _decimal(payroll.balance_amount)
+    old_paid_at = payroll.paid_at
+    old_approved_at = payroll.approved_at
+
+    base_snapshot = _latest_non_settlement_payroll_snapshot(payroll.id, db)
+    open_items = detect_payroll_discrepancies(payroll.employee_id, payroll.payroll_period_id, db)
+    payable_amount = _money(_decimal(base_snapshot.get("payable_amount"), default=str(_decimal(payroll.net_salary))))
+
+    payroll.paid_amount = _money(_decimal(payroll.paid_amount) - reversed_amount)
+    payroll.status = "needs_review" if any(item.status == "open" for item in open_items) or (base_snapshot.get("needs_review_reasons") or []) else "draft"
+    payroll.paid_at = None
+    payroll.approved_at = None
+    _sync_payroll_balance(payroll, payable_amount=payable_amount)
+
+    period = db.get(PayrollPeriod, payroll.payroll_period_id)
+    if period:
+        _set_attendance_review_status_for_period(payroll.employee_id, period, "approved", db)
+
+    reversal_record = Payments(
+        employee_id=payroll.employee_id,
+        employee_payroll_id=payroll.id,
+        date=_utc_now(),
+        amount=_money(-reversed_amount),
+        payment_type=0,
+        description=f"Payroll payment reversal for period #{payroll.payroll_period_id}: {reversal_reason}",
+        start=period.start_date if period else None,
+        end=period.end_date if period else None,
+    )
+    db.add(reversal_record)
+    create_payroll_history_snapshot(
+        payroll,
+        old_gross_salary=_decimal(payroll.gross_salary),
+        old_net_salary=_decimal(payroll.net_salary),
+        reason="payroll_reopened",
+        calculation_data_json={
+            **base_snapshot,
+            "status_before": old_status,
+            "status_after": payroll.status,
+            "reversed_payment_amount": str(reversed_amount),
+            "old_paid_amount": str(old_paid_amount),
+            "new_paid_amount": str(payroll.paid_amount),
+            "old_balance_amount": str(old_balance_amount),
+            "new_balance_amount": str(payroll.balance_amount),
+            "old_paid_at": old_paid_at.isoformat() if old_paid_at else None,
+            "old_approved_at": old_approved_at.isoformat() if old_approved_at else None,
+            "reopen_reason": reversal_reason,
+            "payable_amount": str(payable_amount),
+        },
+        db=db,
+        created_by=reopened_by,
+    )
+    save_audit_log(
+        db,
+        action="payroll_reopened",
+        entity_type="EmployeePayroll",
+        entity_id=payroll.id,
+        old_data_json={
+            "status": old_status,
+            "paid_amount": str(old_paid_amount),
+            "balance_amount": str(old_balance_amount),
+            "paid_at": old_paid_at.isoformat() if old_paid_at else None,
+            "approved_at": old_approved_at.isoformat() if old_approved_at else None,
+        },
+        new_data_json={
+            "status": payroll.status,
+            "paid_amount": str(payroll.paid_amount),
+            "balance_amount": str(payroll.balance_amount),
+            "paid_at": None,
+            "approved_at": None,
+            "reversed_payment_amount": str(reversed_amount),
+            "reopen_reason": reversal_reason,
+        },
+        user_id=reopened_by,
+    )
+    db.commit()
+    db.refresh(payroll)
+    _apply_payroll_snapshot_fields(payroll, base_snapshot)
     return payroll
 
 

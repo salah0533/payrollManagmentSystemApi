@@ -408,6 +408,17 @@ class PayrollPaymentRequest(BaseModel):
     note: Optional[str] = None
 
 
+class PayrollReopenRequest(BaseModel):
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("reason is required")
+        return value.strip()
+
+
 class PayrollDiscrepancyResolveRequest(BaseModel):
     resolution_note: str
     resolved_by: Optional[int] = None

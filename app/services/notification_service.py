@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
@@ -22,6 +23,18 @@ from app.schemas.notifications import (
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_translation_value(value):
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _normalize_translation_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_translation_value(item) for item in value]
+    return value
 
 
 def ensure_notification_localization_schema(db: Session) -> None:
@@ -108,7 +121,7 @@ class NotificationService:
                 message_key="errors.no_active_notification_recipients",
             )
 
-        translation_params = translation_params or {}
+        translation_params = _normalize_translation_value(translation_params or {})
         resolved_title = title or (
             translate(title_key, translation_params, language=DEFAULT_LANGUAGE, fallback="")
             if title_key

@@ -5,7 +5,7 @@ from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_permissions, require_self_or_permission
 from app.models.auth import User
-from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollAdjustmentUpdate, PayrollDiscrepancyResolveRequest, PayrollPaymentRequest
+from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollAdjustmentUpdate, PayrollDiscrepancyResolveRequest, PayrollPaymentRequest, PayrollReopenRequest
 from app.services.payroll_calculation_service import (
     add_payroll_adjustment,
     approve_employee_payroll,
@@ -19,9 +19,11 @@ from app.services.payroll_calculation_service import (
     get_payroll_period,
     list_payroll_periods,
     mark_employee_payroll_paid,
+    reopen_locked_employee_payroll,
     recalculate_payroll_period,
     resolve_payroll_discrepancy,
     calculate_employee_payroll,
+    unapprove_employee_payroll,
     update_payroll_adjustment,
 )
 
@@ -114,6 +116,16 @@ def approve_payroll(
     return api_success(payroll)
 
 
+@router.post("/unapprove/{employee_payroll_id}")
+def unapprove_payroll(
+    employee_payroll_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.approve")),
+):
+    payroll = unapprove_employee_payroll(employee_payroll_id, db, unapproved_by=current_user.id)
+    return api_success(payroll)
+
+
 @router.post("/mark-paid/{employee_payroll_id}")
 def mark_paid(
     employee_payroll_id: int,
@@ -127,6 +139,22 @@ def mark_paid(
         paid_by=current_user.id,
         amount=req.amount if req else None,
         note=req.note if req else None,
+    )
+    return api_success(payroll)
+
+
+@router.post("/reopen/{employee_payroll_id}")
+def reopen_locked_payroll(
+    employee_payroll_id: int,
+    req: PayrollReopenRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.mark_paid")),
+):
+    payroll = reopen_locked_employee_payroll(
+        employee_payroll_id,
+        db,
+        reopened_by=current_user.id,
+        reason=req.reason,
     )
     return api_success(payroll)
 
