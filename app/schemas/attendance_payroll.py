@@ -465,6 +465,32 @@ class PayrollBalanceReportRead(BaseModel):
     employees: list[PayrollEmployeeBalanceRead]
 
 
+class PayrollEmployeeHistorySummaryRead(BaseModel):
+    net_salary_total: Decimal
+    payable_total: Decimal
+    paid_amount_total: Decimal
+    remaining_amount_total: Decimal
+    payroll_count: int
+
+
+class PayrollEmployeeHistoryItemRead(EmployeePayrollRead):
+    period_name: str
+    period_start_date: date
+    period_end_date: date
+
+
+class PayrollEmployeeHistoryRead(BaseModel):
+    employee_id: int
+    employee_name: str
+    employee_status: str
+    page: int
+    page_size: int
+    total_records: int
+    total_pages: int
+    summary: PayrollEmployeeHistorySummaryRead
+    items: list[PayrollEmployeeHistoryItemRead] = []
+
+
 class PayrollPeriodRead(BaseModel):
     id: int
     name: str

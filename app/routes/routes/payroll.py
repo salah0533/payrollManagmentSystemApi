@@ -9,6 +9,7 @@ from app.schemas.attendance_payroll import PayrollAdjustmentCreate, PayrollAdjus
 from app.services.payroll_calculation_service import (
     add_payroll_adjustment,
     approve_employee_payroll,
+    get_employee_payroll_history,
     get_employee_payroll_by_period,
     delete_payroll_adjustment,
     get_payroll_adjustments,
@@ -54,6 +55,18 @@ def get_balance_report(
     current_user: User = Depends(require_permissions("payroll.read_all")),
 ):
     report = get_payroll_balance_report(db, period_id=period_id)
+    return api_success(report)
+
+
+@router.get("/employee-history/{employee_id}")
+def get_employee_history(
+    employee_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("payroll.read_all")),
+):
+    report = get_employee_payroll_history(employee_id, db, page=page, page_size=page_size)
     return api_success(report)
 
 

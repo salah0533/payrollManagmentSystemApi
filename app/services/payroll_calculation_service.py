@@ -2,7 +2,7 @@ import calendar
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions.base_exception import BadRequestException, ResourceNotFoundException
@@ -1728,6 +1728,39 @@ def _hydrate_payroll_snapshot(payroll: EmployeePayroll, db: Session) -> Employee
     return _apply_payroll_snapshot_fields(payroll, _latest_payroll_snapshot(payroll.id, db))
 
 
+def _serialize_employee_payroll(payroll: EmployeePayroll) -> dict:
+    return {
+        "id": payroll.id,
+        "payroll_period_id": payroll.payroll_period_id,
+        "employee_id": payroll.employee_id,
+        "salary_type": payroll.salary_type,
+        "base_salary": _money(_decimal(payroll.base_salary)),
+        "normal_amount": _money(_decimal(payroll.normal_amount)),
+        "overtime_amount": _money(_decimal(payroll.overtime_amount)),
+        "bonus_amount": _money(_decimal(payroll.bonus_amount)),
+        "deduction_amount": _money(_decimal(payroll.deduction_amount)),
+        "late_deduction_amount": _money(_decimal(payroll.late_deduction_amount)),
+        "unpaid_vacation_deduction": _money(_decimal(payroll.unpaid_vacation_deduction)),
+        "adjustment_amount": _money(_decimal(payroll.adjustment_amount)),
+        "gross_salary": _money(_decimal(payroll.gross_salary)),
+        "net_salary": _money(_decimal(payroll.net_salary)),
+        "total_amount": _money(_decimal(payroll.total_amount)),
+        "paid_amount": _money(_decimal(payroll.paid_amount)),
+        "balance_amount": _money(_decimal(payroll.balance_amount)),
+        "status": payroll.status,
+        "calculated_at": payroll.calculated_at,
+        "reviewed_at": payroll.reviewed_at,
+        "approved_at": payroll.approved_at,
+        "paid_at": payroll.paid_at,
+        "notes": payroll.notes,
+        "attendance_deduction_amount": _money(_decimal(getattr(payroll, "attendance_deduction_amount", None))),
+        "manual_deduction_amount": _money(_decimal(getattr(payroll, "manual_deduction_amount", None))),
+        "late_penalty_amount": _money(_decimal(getattr(payroll, "late_penalty_amount", None))),
+        "calculation_data_json": payroll.calculation_data_json or {},
+        "needs_review_reason": getattr(payroll, "needs_review_reason", None),
+    }
+
+
 def get_payroll_period(period_id: int, db: Session):
     period = db.scalar(
         select(PayrollPeriod)
@@ -1808,6 +1841,77 @@ def get_payroll_balance_report(db: Session, period_id: int | None = None, employ
             }
             for row in sorted(employees.values(), key=lambda item: (item["employee_name"].lower(), item["employee_id"]))
         ],
+    }
+
+
+def get_employee_payroll_history(employee_id: int, db: Session, page: int = 1, page_size: int = 20):
+    employee = db.get(Employees, employee_id)
+    if not employee or employee.deleted_at is not None:
+        raise ResourceNotFoundException("Employee")
+
+    safe_page = max(1, int(page or 1))
+    safe_page_size = max(1, min(int(page_size or 20), 100))
+
+    total_records = int(
+        db.scalar(
+            select(func.count(EmployeePayroll.id))
+            .where(EmployeePayroll.employee_id == employee_id)
+        )
+        or 0
+    )
+    total_pages = (total_records + safe_page_size - 1) // safe_page_size if total_records else 0
+    if total_pages and safe_page > total_pages:
+        safe_page = total_pages
+
+    summary_row = db.execute(
+        select(
+            func.coalesce(func.sum(EmployeePayroll.net_salary), 0),
+            func.coalesce(func.sum(EmployeePayroll.total_amount), 0),
+            func.coalesce(func.sum(EmployeePayroll.paid_amount), 0),
+            func.coalesce(func.sum(EmployeePayroll.balance_amount), 0),
+            func.count(EmployeePayroll.id),
+        )
+        .where(EmployeePayroll.employee_id == employee_id)
+    ).one()
+
+    payrolls = db.scalars(
+        select(EmployeePayroll)
+        .join(PayrollPeriod, EmployeePayroll.payroll_period_id == PayrollPeriod.id)
+        .options(selectinload(EmployeePayroll.payroll_period))
+        .where(EmployeePayroll.employee_id == employee_id)
+        .order_by(PayrollPeriod.start_date.desc(), EmployeePayroll.id.desc())
+        .offset((safe_page - 1) * safe_page_size if total_records else 0)
+        .limit(safe_page_size)
+    ).all()
+
+    items: list[dict] = []
+    for payroll in payrolls:
+        hydrated = _hydrate_payroll_snapshot(payroll, db)
+        items.append(
+            {
+                **_serialize_employee_payroll(hydrated),
+                "period_name": hydrated.payroll_period.name,
+                "period_start_date": hydrated.payroll_period.start_date,
+                "period_end_date": hydrated.payroll_period.end_date,
+            }
+        )
+
+    return {
+        "employee_id": employee.id,
+        "employee_name": employee.fullname,
+        "employee_status": employee.status,
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "total_records": total_records,
+        "total_pages": total_pages,
+        "summary": {
+            "net_salary_total": _money(_decimal(summary_row[0])),
+            "payable_total": _money(_decimal(summary_row[1])),
+            "paid_amount_total": _money(_decimal(summary_row[2])),
+            "remaining_amount_total": _money(_decimal(summary_row[3])),
+            "payroll_count": int(summary_row[4] or 0),
+        },
+        "items": items,
     }
 
 
