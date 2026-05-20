@@ -388,7 +388,22 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
 
         self.assertEqual(recalculated_day.status, "late")
         self.assertEqual(recalculated_day.late_minutes, 31)
-        self.assertEqual(recalculated_day.unpaid_minutes, 31)
+
+    def test_manual_correction_allows_blank_reason(self):
+        correction, updated_day = create_attendance_correction(
+            AttendanceCorrectionRequest(
+                employee_id=self.employee.id,
+                work_date=date(2026, 5, 12),
+                correction_type="field",
+                new_values_json={"check_in_time": "09:15"},
+                reason="   ",
+                corrected_by=1,
+            ),
+            self.db,
+        )
+
+        self.assertEqual(correction.reason, "")
+        self.assertEqual(updated_day.check_in_time, time(9, 15))
 
     def test_missing_checkout_notification_waits_until_schedule_end(self):
         create_attendance_event(

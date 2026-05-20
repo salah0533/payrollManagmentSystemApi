@@ -41,15 +41,13 @@ class AttendanceCorrectionRequest(BaseModel):
     target_status: Optional[str] = None
     options: dict[str, Any] = Field(default_factory=dict)
     original_event_id: Optional[int] = None
-    reason: str
+    reason: str = ""
     corrected_by: Optional[int] = None
 
     @field_validator("reason")
     @classmethod
     def validate_reason(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("reason is required")
-        return value.strip()
+        return (value or "").strip()
 
     @field_validator("correction_type")
     @classmethod
@@ -89,16 +87,14 @@ class AttendanceCorrectionRequest(BaseModel):
 
 class AttendanceSmartCorrectionRequest(BaseModel):
     target_status: str
-    reason: str
+    reason: str = ""
     options: dict[str, Any] = Field(default_factory=dict)
     corrected_by: Optional[int] = None
 
     @field_validator("reason")
     @classmethod
     def validate_reason(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("reason is required")
-        return value.strip()
+        return (value or "").strip()
 
 
 class AttendanceReviewRequest(BaseModel):
