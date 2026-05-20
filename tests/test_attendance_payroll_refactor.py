@@ -1197,6 +1197,24 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
             )
         self.db.rollback()
 
+    def test_weekly_off_date_can_be_corrected_to_unpaid(self):
+        correction, day = apply_smart_attendance_status_correction(
+            self.employee.id,
+            date(2026, 5, 1),
+            "unpaid",
+            corrected_by=1,
+            reason="Convert weekly off to unpaid",
+            options={},
+            db=self.db,
+        )
+
+        self.assertEqual(correction.new_values_json["status"], "unpaid")
+        self.assertEqual(day.status, "unpaid")
+        self.assertEqual(day.expected_work_minutes, 480)
+        self.assertEqual(day.unpaid_minutes, 480)
+        self.assertEqual(day.normal_paid_minutes, 0)
+        self.assertEqual(day.absence_minutes, 0)
+
     def test_current_period_calendar_days_mode_accrues_through_cutoff_date(self):
         period = self._payroll_period_for_month(2026, 5)
         payroll = self._payroll_stub(period)

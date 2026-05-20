@@ -99,6 +99,7 @@ ATTENDANCE_STATUS_CODES = (
     "holiday",
     "paid_vacation",
     "unpaid_vacation",
+    "unpaid",
     "sick_leave",
     "manually_corrected",
 )

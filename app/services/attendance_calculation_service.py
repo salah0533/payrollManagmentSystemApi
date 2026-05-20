@@ -783,6 +783,12 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
     elif day.status == "unpaid_vacation":
         day.absence_minutes = expected_work_minutes
         day.unpaid_minutes = expected_work_minutes
+    elif day.status == "unpaid":
+        day.expected_work_minutes = expected_work_minutes
+        day.absence_minutes = 0
+        day.unpaid_minutes = expected_work_minutes
+        day.normal_paid_minutes = 0
+        day.overtime_minutes = 0
     elif day.status in {"paid_vacation", "sick_leave", "weekly_off", "holiday"}:
         day.absence_minutes = 0
         if day.status in {"weekly_off", "holiday"}:
@@ -1024,6 +1030,14 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
             "break_end_time": None,
             "check_out_time": None,
             "status": "unpaid_vacation",
+        }
+    if target_status == "unpaid":
+        return {
+            "check_in_time": None,
+            "break_start_time": None,
+            "break_end_time": None,
+            "check_out_time": None,
+            "status": "unpaid",
         }
     if target_status == "sick_leave":
         return {
