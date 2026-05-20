@@ -11,7 +11,12 @@ from app.models.types.vacationStatus import VacationStatuses
 from app.schemas.vacationBaseModel import BulkVacationCreateModel, VacationBaseModel, UpdateVacationBaseModel
 from app.services.notification_service import NotificationService
 from app.services.payroll_calculation_service import sync_vacation_with_payroll
-from app.services.vacation_types_services import HOLIDAY_VACATION_TYPE_CODE, get_vacation_type_ids_by_codes
+from app.services.vacation_types_services import (
+    HOLIDAY_VACATION_TYPE_CODE,
+    PAID_VACATION_TYPE_CODE,
+    UNPAID_VACATION_TYPE_CODE,
+    get_vacation_type_ids_by_codes,
+)
 from app.services.vacation_balance_service import VacationLedgerEntry, ensure_vacation_balance_available
 
 
@@ -177,6 +182,17 @@ def is_holiday_vacation_type(vacation_type_id: int, db: Session) -> bool:
     return int(vacation_type_id) in get_holiday_vacation_type_ids(db)
 
 
+def normalize_vacation_is_paid(vacation_type_id: int, is_paid: bool, db: Session) -> bool:
+    vacation_type_id = int(vacation_type_id)
+    paid_type_ids = get_vacation_type_ids_by_codes(db, HOLIDAY_VACATION_TYPE_CODE, PAID_VACATION_TYPE_CODE)
+    if vacation_type_id in paid_type_ids:
+        return True
+    unpaid_type_ids = get_vacation_type_ids_by_codes(db, UNPAID_VACATION_TYPE_CODE)
+    if vacation_type_id in unpaid_type_ids:
+        return False
+    return is_paid
+
+
 def get_employee_holiday_dates(employee_id: int, start_date: date, end_date: date, db: Session) -> list[date]:
     holiday_type_ids = get_holiday_vacation_type_ids(db)
     if not holiday_type_ids:
@@ -261,7 +277,7 @@ def _clear_or_recalculate_removed_vacation_days(
 def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = None):
     holiday_type = is_holiday_vacation_type(vac.vacation_type, db)
     normalized_status = int(VacationStatuses.approved) if holiday_type else vac.vacation_status
-    normalized_paid = True if holiday_type else vac.is_paid
+    normalized_paid = normalize_vacation_is_paid(vac.vacation_type, vac.is_paid, db)
     ensure_vacation_balance_available(
         VacationLedgerEntry(
             id=None,
@@ -332,6 +348,9 @@ def update_vacation(updated_vac: UpdateVacationBaseModel, db: Session, *, actor:
         if val is None or key == "id":
             continue
         setattr(vac,key,val)
+    if is_holiday_vacation_type(vac.vacation_type, db):
+        vac.vacation_status = int(VacationStatuses.approved)
+    vac.is_paid = normalize_vacation_is_paid(vac.vacation_type, vac.is_paid, db)
     ensure_vacation_balance_available(
         VacationLedgerEntry(
             id=vac.id,

@@ -5,9 +5,11 @@ from sqlalchemy.orm import Session
 
 
 HOLIDAY_VACATION_TYPE_CODE = "holiday"
+PAID_VACATION_TYPE_CODE = "paid"
+UNPAID_VACATION_TYPE_CODE = "unpaid"
 DEFAULT_VACATION_TYPES = (
-    {"id": 0, "code": "paid", "vacation_type": "paid"},
-    {"id": 1, "code": "unpaid", "vacation_type": "unpaid"},
+    {"id": 0, "code": PAID_VACATION_TYPE_CODE, "vacation_type": PAID_VACATION_TYPE_CODE},
+    {"id": 1, "code": UNPAID_VACATION_TYPE_CODE, "vacation_type": UNPAID_VACATION_TYPE_CODE},
     {"id": 2, "code": "sick", "vacation_type": "sick"},
     {"id": 3, "code": "emergency", "vacation_type": "emergency"},
     {"id": 4, "code": HOLIDAY_VACATION_TYPE_CODE, "vacation_type": HOLIDAY_VACATION_TYPE_CODE},
