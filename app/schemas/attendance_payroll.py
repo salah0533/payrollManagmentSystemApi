@@ -227,8 +227,6 @@ class PayrollPolicyPayload(BaseModel):
     significant_change_threshold: Decimal = Decimal("1.00")
     paid_vacation_counts_for_daily: bool = True
     overtime_enabled: bool = True
-    late_makeup_enabled: bool = True
-    late_deduction_enabled: bool = False
     monthly_payroll_calculation_mode: str = DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE
     auto_recalculate_draft_payroll: bool = True
     lock_payroll_after_payment: bool = True

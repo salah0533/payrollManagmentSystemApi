@@ -6,7 +6,7 @@ from dateutil import tz
 from sqlalchemy import and_, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.exceptions.base_exception import ResourceNotFoundException
+from app.exceptions.base_exception import BadRequestException, ResourceNotFoundException
 from app.models.attendance_payroll import EmployeeCompensation, PayrollPolicy, WorkSchedule
 from app.models.attendance_payroll import (
     DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
@@ -202,8 +202,6 @@ def get_or_create_payroll_policy(db: Session) -> PayrollPolicy:
         significant_change_threshold=Decimal("1.00"),
         paid_vacation_counts_for_daily=True,
         overtime_enabled=True,
-        late_makeup_enabled=True,
-        late_deduction_enabled=False,
         monthly_payroll_calculation_mode=DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
         auto_recalculate_draft_payroll=True,
         lock_payroll_after_payment=True,
@@ -273,6 +271,22 @@ def get_default_work_schedule(db: Session) -> WorkSchedule:
     return get_employee_schedule(0, date.today(), db)
 
 
+def list_work_schedules(db: Session) -> list[WorkSchedule]:
+    _ensure_work_schedule_schema(db)
+    get_default_work_schedule(db)
+    return db.scalars(
+        select(WorkSchedule).order_by(WorkSchedule.is_default.desc(), WorkSchedule.id.asc())
+    ).all()
+
+
+def get_work_schedule(schedule_id: int, db: Session) -> WorkSchedule:
+    _ensure_work_schedule_schema(db)
+    schedule = db.get(WorkSchedule, schedule_id)
+    if not schedule:
+        raise ResourceNotFoundException("Work schedule", schedule_id)
+    return schedule
+
+
 def get_local_day_bounds(target_date: date, schedule: WorkSchedule) -> tuple[datetime, datetime]:
     tz = get_schedule_timezone(schedule)
     start_local = datetime.combine(target_date, time.min, tzinfo=tz)
@@ -280,19 +294,7 @@ def get_local_day_bounds(target_date: date, schedule: WorkSchedule) -> tuple[dat
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
-def update_default_work_schedule(db: Session, **values) -> WorkSchedule:
-    schedule = get_default_work_schedule(db)
-    if values.get("is_default", True):
-        other_defaults = db.scalars(
-            select(WorkSchedule).where(
-                WorkSchedule.id != schedule.id,
-                WorkSchedule.is_default.is_(True),
-            )
-        ).all()
-        for item in other_defaults:
-            item.is_default = False
-            db.add(item)
-
+def _apply_work_schedule_values(schedule: WorkSchedule, values: dict[str, object]) -> WorkSchedule:
     for key, value in values.items():
         setattr(schedule, key, value)
     if schedule.break_start_time and schedule.break_end_time:
@@ -304,6 +306,68 @@ def update_default_work_schedule(db: Session, **values) -> WorkSchedule:
             int(schedule.break_minutes or 0),
         )
     schedule.updated_at = _utc_now()
+    return schedule
+
+
+def _set_default_schedule(schedule: WorkSchedule, db: Session) -> None:
+    other_schedules = db.scalars(
+        select(WorkSchedule).where(
+            WorkSchedule.id != schedule.id,
+            WorkSchedule.is_default.is_(True),
+        )
+    ).all()
+    for item in other_schedules:
+        item.is_default = False
+        item.updated_at = _utc_now()
+        db.add(item)
+    schedule.is_default = True
+
+
+def create_work_schedule(db: Session, **values) -> WorkSchedule:
+    _ensure_work_schedule_schema(db)
+    existing_schedules = db.scalars(select(WorkSchedule).order_by(WorkSchedule.id.asc())).all()
+    make_default = bool(values.get("is_default", False)) or not existing_schedules
+    schedule = WorkSchedule(
+        name=str(values["name"]),
+        start_time=values["start_time"],
+        end_time=values["end_time"],
+        break_start_time=values.get("break_start_time"),
+        break_end_time=values.get("break_end_time"),
+        break_minutes=int(values.get("break_minutes", 0) or 0),
+        weekly_off_days=list(values.get("weekly_off_days") or []),
+        timezone=str(values["timezone"]),
+        is_default=make_default,
+    )
+    schedule = _apply_work_schedule_values(schedule, {})
+    db.add(schedule)
+    db.flush()
+    if make_default:
+        _set_default_schedule(schedule, db)
+        db.add(schedule)
+        db.flush()
+    return schedule
+
+
+def update_default_work_schedule(db: Session, **values) -> WorkSchedule:
+    schedule = get_default_work_schedule(db)
+    return update_work_schedule(schedule.id, db, **values)
+
+
+def update_work_schedule(schedule_id: int, db: Session, **values) -> WorkSchedule:
+    schedule = get_work_schedule(schedule_id, db)
+    make_default = bool(values.get("is_default", schedule.is_default))
+    if schedule.is_default and not make_default:
+        has_other_default = db.scalar(
+            select(WorkSchedule.id).where(
+                WorkSchedule.id != schedule.id,
+                WorkSchedule.is_default.is_(True),
+            ).limit(1)
+        ) is not None
+        if not has_other_default:
+            raise BadRequestException("At least one default work schedule is required")
+    if make_default:
+        _set_default_schedule(schedule, db)
+    schedule = _apply_work_schedule_values(schedule, values)
     db.add(schedule)
     db.flush()
     return schedule

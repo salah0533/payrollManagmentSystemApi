@@ -530,15 +530,10 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     attendance_minute_rate = resolved_rates["auto_minute_rate"]
     earned_attendance_deduction = _money(min(base_salary, _money(attendance_minute_rate * Decimal(earned_unpaid_minutes))))
     attendance_deduction = _money(min(base_salary, _money(attendance_minute_rate * Decimal(unpaid_minutes))))
-    unrecovered_late_minutes = max(0, summary["late_minutes"] + summary["early_leave_minutes"] - summary["late_makeup_minutes"])
-    late_penalty_enabled = bool(policy.late_deduction_enabled)
-    late_penalty_rate = resolved_rates["resolved_late_deduction_rate"] if late_penalty_enabled else Decimal("0.00")
-    # Monthly payroll already converts late/early-leave time into unpaid minutes.
-    # Charging an extra late penalty on top of that produces a double deduction.
     late_penalty_eligible_minutes = 0
-    raw_late_penalty_amount = (
-        _money(late_penalty_rate * Decimal(late_penalty_eligible_minutes)) if late_penalty_enabled else Decimal("0.00")
-    )
+    late_penalty_enabled = False
+    late_penalty_rate = Decimal("0.00")
+    raw_late_penalty_amount = Decimal("0.00")
     late_penalty_amount = _money(min(raw_late_penalty_amount, max(Decimal("0.00"), base_salary - attendance_deduction)))
     payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
     overtime_amount = _money((resolved_rates["resolved_overtime_rate"] / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")

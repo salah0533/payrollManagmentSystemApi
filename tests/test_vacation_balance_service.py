@@ -94,8 +94,6 @@ class VacationBalanceServiceTests(unittest.TestCase):
             significant_change_threshold=Decimal("1.00"),
             paid_vacation_counts_for_daily=True,
             overtime_enabled=True,
-            late_makeup_enabled=True,
-            late_deduction_enabled=False,
             auto_recalculate_draft_payroll=True,
             lock_payroll_after_payment=True,
             holidays_json=[],

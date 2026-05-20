@@ -85,8 +85,6 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
                     significant_change_threshold=Decimal("1.00"),
                     paid_vacation_counts_for_daily=True,
                     overtime_enabled=True,
-                    late_makeup_enabled=True,
-                    late_deduction_enabled=False,
                     monthly_payroll_calculation_mode="working_days",
                     auto_recalculate_draft_payroll=True,
                     lock_payroll_after_payment=True,
@@ -748,10 +746,6 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
     def test_monthly_payroll_does_not_double_deduct_partial_late_day(self):
         period = self._payroll_period_for_month(2026, 5)
         payroll = self._payroll_stub(period)
-        policy = self._policy()
-        policy.late_deduction_enabled = True
-        self.db.add(policy)
-        self.db.flush()
         days = self._month_days(absent_dates={date(2026, 5, 3)})
         for day in days:
             if day.work_date == date(2026, 5, 4):
@@ -957,10 +951,6 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
     def test_monthly_tiny_attendance_keeps_one_minute_earned_when_late_penalty_enabled(self):
         period = self._payroll_period_for_month(2026, 5)
         payroll = self._payroll_stub(period)
-        policy = self._policy()
-        policy.late_deduction_enabled = True
-        self.db.add(policy)
-        self.db.flush()
         work_date = self._working_days_for_period(period)[0]
         days = [
             AttendanceDay(
@@ -1267,8 +1257,6 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
             significant_change_threshold=Decimal(str(policy.significant_change_threshold)),
             paid_vacation_counts_for_daily=policy.paid_vacation_counts_for_daily,
             overtime_enabled=policy.overtime_enabled,
-            late_makeup_enabled=policy.late_makeup_enabled,
-            late_deduction_enabled=policy.late_deduction_enabled,
             monthly_payroll_calculation_mode="calendar_days",
             auto_recalculate_draft_payroll=policy.auto_recalculate_draft_payroll,
             lock_payroll_after_payment=policy.lock_payroll_after_payment,
