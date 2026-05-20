@@ -125,14 +125,8 @@ def _resolve_entitlement_days(
     if year in employee_entitlements:
         return employee_entitlements[year], year, "employee_year"
 
-    eligible_previous_years = [configured_year for configured_year in employee_entitlements.keys() if configured_year <= year]
-    if eligible_previous_years:
-        source_year = max(eligible_previous_years)
-        source = "employee_year" if source_year == year else "fallback_previous_employee_year"
-        return employee_entitlements[source_year], source_year, source
-
     default_days = int(employee.vacation_days or 0)
-    if default_days > 0 and not employee_entitlements:
+    if default_days > 0:
         return default_days, None, "employee_default"
 
     return 0, None, "unconfigured"
