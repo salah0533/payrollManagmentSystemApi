@@ -1305,6 +1305,76 @@ def reconcile_existing_payrolls_for_settings_change(
     return summary
 
 
+def reconcile_existing_payrolls_for_employee_due_change(
+    employee_id: int,
+    db: Session,
+    *,
+    reason: str = "employee_due_balance_updated",
+    created_by: int | None = None,
+) -> dict[str, int]:
+    employee = db.get(Employees, employee_id)
+    if not employee:
+        raise ResourceNotFoundException("Employee")
+
+    payrolls = db.scalars(
+        select(EmployeePayroll)
+        .options(selectinload(EmployeePayroll.payroll_period))
+        .where(EmployeePayroll.employee_id == employee_id)
+        .order_by(EmployeePayroll.payroll_period_id.asc(), EmployeePayroll.id.asc())
+    ).all()
+
+    summary = {
+        "recalculated": 0,
+        "refreshed": 0,
+        "skipped": 0,
+    }
+
+    for payroll in payrolls:
+        period = payroll.payroll_period
+        if not period or period.status == "cancelled":
+            summary["skipped"] += 1
+            continue
+
+        if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
+            latest_snapshot = _latest_payroll_snapshot(payroll.id, db)
+            due_settlement_amount = _sum_adjustments_by_type(_load_adjustments(payroll.id, db), DUE_SETTLEMENT_ADJUSTMENT_TYPE)
+            updated_snapshot = {
+                **latest_snapshot,
+                **{
+                    key: str(value)
+                    for key, value in _build_due_state_values(
+                        employee_due_balance=_decimal(getattr(employee, "dues", 0)),
+                        due_settlement_amount=due_settlement_amount,
+                        paid_amount=_decimal(payroll.paid_amount),
+                    ).items()
+                },
+            }
+            create_payroll_history_snapshot(
+                payroll,
+                old_gross_salary=_decimal(payroll.gross_salary),
+                old_net_salary=_decimal(payroll.net_salary),
+                reason=reason,
+                calculation_data_json=updated_snapshot,
+                db=db,
+                created_by=created_by,
+            )
+            _apply_payroll_snapshot_fields(payroll, updated_snapshot)
+            summary["refreshed"] += 1
+            continue
+
+        calculate_employee_payroll(
+            employee_id=payroll.employee_id,
+            payroll_period_id=payroll.payroll_period_id,
+            db=db,
+            reason=reason,
+            created_by=created_by,
+            force_history=True,
+        )
+        summary["recalculated"] += 1
+
+    return summary
+
+
 def sync_payroll_with_attendance_context(employee_id: int, work_date: date, db: Session, trigger_reason: str = "attendance_change") -> dict[str, object]:
     period = get_or_create_payroll_period_for_date(work_date, db)
     payroll = _get_employee_payroll(employee_id, period.id, db)

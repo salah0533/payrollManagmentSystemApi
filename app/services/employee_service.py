@@ -381,6 +381,7 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
     )
 
     old_data = serialize_model(employee)
+    previous_due_balance = employee.dues
     previous_compensation_state = {
         "salary_type": employee.salary_type,
         "monthly_price": employee.monthly_price,
@@ -397,6 +398,15 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
         for key in previous_compensation_state
     ):
         _sync_employee_compensation_record(employee, db, actor=actor, effective_from=date.today())
+    if employee.dues != previous_due_balance:
+        from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_employee_due_change
+
+        reconcile_existing_payrolls_for_employee_due_change(
+            employee.id,
+            db,
+            reason="employee_due_balance_updated",
+            created_by=actor.id if actor else None,
+        )
     save_audit_log(
         db,
         action="employee_updated",

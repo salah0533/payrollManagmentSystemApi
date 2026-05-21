@@ -17,6 +17,7 @@ from app.models.attendance_payroll import (
     AttendanceDay,
     EmployeeCompensation,
     EmployeePayroll,
+    PayrollAdjustment,
     PayrollCalculationHistory,
     PayrollDiscrepancy,
     PayrollPolicy,
@@ -29,6 +30,7 @@ from app.models.salary_type import SalaryType
 from app.routes.routes.settings import put_payroll_policy
 from app.schemas.attendance_payroll import AttendanceCorrectionRequest
 from app.schemas.attendance_payroll import PayrollPolicyPayload
+from app.schemas.user import EmployeeUpdateRequest
 from app.services.attendance_calculation_service import (
     apply_smart_attendance_status_correction,
     calculate_attendance_day,
@@ -39,6 +41,7 @@ from app.services.attendance_calculation_service import (
     get_attendance_days_by_date,
     process_pending_attendance_notifications,
 )
+from app.services.employee_service import update_employee
 from app.services.payroll_calculation_service import (
     approve_employee_payroll,
     calculate_employee_payroll,
@@ -1417,6 +1420,99 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
 
         with self.assertRaises(BadRequestException):
             approve_employee_payroll(payroll.id, self.db, approved_by=1)
+
+    def test_updating_employee_dues_refreshes_due_settlement_snapshot_for_draft_payroll(self):
+        self.employee.dues = Decimal("100.00")
+        self.db.add(self.employee)
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.db.add(
+            PayrollAdjustment(
+                employee_payroll_id=payroll.id,
+                payroll_period_id=period.id,
+                employee_id=self.employee.id,
+                adjustment_type="due_settlement",
+                amount=Decimal("40.00"),
+                reason="Existing due settlement",
+            )
+        )
+        self.db.flush()
+        calculate_employee_payroll(self.employee.id, period.id, self.db, reason="payroll_adjustment", force_history=True)
+        self.db.commit()
+
+        update_employee(
+            self.employee.id,
+            EmployeeUpdateRequest(dues=Decimal("200.00")),
+            self.db,
+            actor=SimpleNamespace(id=99),
+        )
+
+        refreshed = get_employee_payroll_by_period(self.employee.id, period.id, self.db)
+        latest_history = self.db.scalar(
+            select(PayrollCalculationHistory)
+            .where(PayrollCalculationHistory.employee_payroll_id == refreshed.id)
+            .order_by(PayrollCalculationHistory.created_at.desc(), PayrollCalculationHistory.id.desc())
+        )
+
+        self.assertEqual(refreshed.employee_due_balance, Decimal("200.00"))
+        self.assertEqual(refreshed.due_settlement_amount, Decimal("40.00"))
+        self.assertEqual(refreshed.remaining_due_balance_after_settlement, Decimal("160.00"))
+        self.assertEqual(latest_history.reason, "employee_due_balance_updated")
+        self.assertEqual(latest_history.calculation_data_json["employee_due_balance"], "200.00")
+        self.assertEqual(latest_history.calculation_data_json["remaining_due_balance_after_settlement"], "160.00")
+
+    def test_updating_employee_dues_refreshes_due_settlement_snapshot_for_approved_payroll(self):
+        self.employee.dues = Decimal("100.00")
+        self.db.add(self.employee)
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.db.add(
+            PayrollAdjustment(
+                employee_payroll_id=payroll.id,
+                payroll_period_id=period.id,
+                employee_id=self.employee.id,
+                adjustment_type="due_settlement",
+                amount=Decimal("40.00"),
+                reason="Existing due settlement",
+            )
+        )
+        self.db.flush()
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, reason="payroll_adjustment", force_history=True)
+        self.db.commit()
+
+        approved = approve_employee_payroll(payroll.id, self.db, approved_by=1)
+        approved_total_amount = approved.total_amount
+
+        update_employee(
+            self.employee.id,
+            EmployeeUpdateRequest(dues=Decimal("200.00")),
+            self.db,
+            actor=SimpleNamespace(id=99),
+        )
+
+        refreshed = get_employee_payroll_by_period(self.employee.id, period.id, self.db)
+        latest_history = self.db.scalar(
+            select(PayrollCalculationHistory)
+            .where(PayrollCalculationHistory.employee_payroll_id == refreshed.id)
+            .order_by(PayrollCalculationHistory.created_at.desc(), PayrollCalculationHistory.id.desc())
+        )
+
+        self.assertEqual(refreshed.status, "approved")
+        self.assertEqual(refreshed.total_amount, approved_total_amount)
+        self.assertEqual(refreshed.employee_due_balance, Decimal("200.00"))
+        self.assertEqual(refreshed.due_settlement_amount, Decimal("40.00"))
+        self.assertEqual(refreshed.remaining_due_balance_after_settlement, Decimal("160.00"))
+        self.assertEqual(latest_history.reason, "employee_due_balance_updated")
+        self.assertEqual(latest_history.calculation_data_json["employee_due_balance"], "200.00")
+        self.assertEqual(latest_history.calculation_data_json["remaining_due_balance_after_settlement"], "160.00")
 
     def test_payment_succeeds_with_only_medium_discrepancies_when_approved(self):
         period = self._payroll_period_for_month(2026, 5)
