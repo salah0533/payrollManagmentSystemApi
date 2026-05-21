@@ -1308,8 +1308,12 @@ def get_attendance_days_by_date(work_date: date, db: Session) -> list[Attendance
     _materialize_weekly_off_rows_for_active_employees(work_date, work_date, db)
     return db.scalars(
         select(AttendanceDay)
+        .join(Employees, AttendanceDay.employee_id == Employees.id)
         .options(selectinload(AttendanceDay.events))
-        .where(AttendanceDay.work_date == work_date)
+        .where(
+            Employees.deleted_at.is_(None),
+            AttendanceDay.work_date == work_date,
+        )
         .order_by(AttendanceDay.employee_id.asc())
     ).all()
 
@@ -1318,8 +1322,10 @@ def get_attendance_days_in_range(start_date: date, end_date: date, db: Session) 
     _materialize_weekly_off_rows_for_active_employees(start_date, end_date, db)
     return db.scalars(
         select(AttendanceDay)
+        .join(Employees, AttendanceDay.employee_id == Employees.id)
         .options(selectinload(AttendanceDay.events))
         .where(
+            Employees.deleted_at.is_(None),
             AttendanceDay.work_date >= start_date,
             AttendanceDay.work_date <= end_date,
         )

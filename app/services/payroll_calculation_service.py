@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import and_, delete, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, with_loader_criteria
 
 from app.exceptions.base_exception import BadRequestException, ResourceNotFoundException
 from app.models.attendance_payroll import (
@@ -2229,11 +2229,23 @@ def _serialize_employee_payroll(payroll: EmployeePayroll) -> dict:
     }
 
 
-def get_payroll_period(period_id: int, db: Session):
+def get_payroll_period(period_id: int, db: Session, *, include_archived: bool = False):
+    options = [
+        selectinload(PayrollPeriod.payrolls).selectinload(EmployeePayroll.employee),
+    ]
+    if not include_archived:
+        options.append(
+            with_loader_criteria(
+                EmployeePayroll,
+                EmployeePayroll.employee.has(Employees.deleted_at.is_(None)),
+                include_aliases=True,
+            )
+        )
     period = db.scalar(
         select(PayrollPeriod)
-        .options(selectinload(PayrollPeriod.payrolls))
+        .options(*options)
         .where(PayrollPeriod.id == period_id)
+        .execution_options(populate_existing=True)
     )
     if not period:
         raise ResourceNotFoundException("Payroll period")
@@ -2249,8 +2261,16 @@ def list_payroll_periods(db: Session):
     ).all()
 
 
-def get_payroll_balance_report(db: Session, period_id: int | None = None, employee_id: int | None = None):
-    query = select(EmployeePayroll).options(selectinload(EmployeePayroll.employee))
+def get_payroll_balance_report(
+    db: Session,
+    period_id: int | None = None,
+    employee_id: int | None = None,
+    *,
+    include_archived: bool = False,
+):
+    query = select(EmployeePayroll).join(Employees, EmployeePayroll.employee_id == Employees.id).options(selectinload(EmployeePayroll.employee))
+    if not include_archived:
+        query = query.where(Employees.deleted_at.is_(None))
     if period_id is not None:
         query = query.where(EmployeePayroll.payroll_period_id == period_id)
     if employee_id is not None:
@@ -2405,14 +2425,17 @@ def get_payroll_history(employee_payroll_id: int, db: Session):
     ).all()
 
 
-def get_payroll_discrepancies(period_id: int, db: Session):
+def get_payroll_discrepancies(period_id: int, db: Session, *, include_archived: bool = False):
     reconcile_payroll_period_discrepancies(period_id, db)
     db.commit()
-    return db.scalars(
+    query = (
         select(PayrollDiscrepancy)
+        .join(Employees, PayrollDiscrepancy.employee_id == Employees.id)
         .where(PayrollDiscrepancy.payroll_period_id == period_id)
-        .order_by(PayrollDiscrepancy.created_at.desc(), PayrollDiscrepancy.id.desc())
-    ).all()
+    )
+    if not include_archived:
+        query = query.where(Employees.deleted_at.is_(None))
+    return db.scalars(query.order_by(PayrollDiscrepancy.created_at.desc(), PayrollDiscrepancy.id.desc())).all()
 
 
 def sync_vacation_with_payroll(employee_id: int, start_date: date, end_date: date, db: Session, reason: str):

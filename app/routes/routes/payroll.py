@@ -43,20 +43,22 @@ def get_period_list(
 @router.get("/period/{period_id}")
 def get_period(
     period_id: int,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("payroll.read_all")),
 ):
-    period = get_payroll_period(period_id, db)
+    period = get_payroll_period(period_id, db, include_archived=include_archived)
     return api_success(period)
 
 
 @router.get("/report")
 def get_balance_report(
     period_id: int | None = None,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("payroll.read_all")),
 ):
-    report = get_payroll_balance_report(db, period_id=period_id)
+    report = get_payroll_balance_report(db, period_id=period_id, include_archived=include_archived)
     return api_success(report)
 
 
@@ -172,10 +174,11 @@ def get_history(
 @router.get("/discrepancies/{period_id}")
 def get_discrepancy_list(
     period_id: int,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permissions("payroll.read_all")),
 ):
-    discrepancies = get_payroll_discrepancies(period_id, db)
+    discrepancies = get_payroll_discrepancies(period_id, db, include_archived=include_archived)
     return api_success(discrepancies)
 
 

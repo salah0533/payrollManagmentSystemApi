@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.exceptions.db_exceptions.noVacationFound import NoVacationFound
 from app.models.auth import User
 from app.models.attendance_payroll import AttendanceCorrection, AttendanceDay, AttendanceEvent
+from app.models.employees import Employees
 from app.models.vacation import Vacation
 from app.models.types.vacationStatus import VacationStatuses
 from app.schemas.vacationBaseModel import BulkVacationCreateModel, VacationBaseModel, UpdateVacationBaseModel
@@ -128,7 +129,11 @@ def _notify_vacation_status_change(vacation: Vacation, db: Session, actor: User 
 def get_all_vacations(year:int,db:Session):
     return db.scalars(
         select(Vacation)
-        .where(extract("year",Vacation.start_date)==year)
+        .join(Employees, Vacation.employee_id == Employees.id)
+        .where(
+            Employees.deleted_at.is_(None),
+            extract("year",Vacation.start_date)==year,
+        )
     ).all()
 
 def get_all_current_vacations(db: Session):
@@ -136,7 +141,9 @@ def get_all_current_vacations(db: Session):
 
     return db.scalars(
         select(Vacation)
+        .join(Employees, Vacation.employee_id == Employees.id)
         .where(
+            Employees.deleted_at.is_(None),
             Vacation.start_date <= today,
             Vacation.end_date >= today
         )

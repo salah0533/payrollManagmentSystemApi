@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.responses import api_success
-from app.dependencies.auth import require_permissions
+from app.dependencies.auth import require_admin, require_permissions
 from app.db.session import get_db
 from app.models.auth import User
-from app.schemas.user import EmployeeCreateRequest, EmployeeUpdateRequest
+from app.schemas.user import AdminPasswordConfirmRequest, EmployeeCreateRequest, EmployeeUpdateRequest
 from app.services.employee_service import (
     add_employee,
     delete_employee,
@@ -53,10 +53,11 @@ def create_employee(
 @router.delete("/{id}")
 def delete_employee_by_id(
     id:int,
+    payload: AdminPasswordConfirmRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permissions("employees.delete")),
+    current_user: User = Depends(require_admin),
 ):
-    delete_employee(id,db, actor=current_user)
+    delete_employee(id, db, admin_password=payload.admin_password, actor=current_user)
     return api_success()
 
 @router.put("/{id}")

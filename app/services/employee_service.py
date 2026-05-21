@@ -16,7 +16,7 @@ from app.schemas.user import EmployeeCompensationRead, EmployeeCreateRequest, Em
 from app.services.auto_attendance_service import resolve_auto_attendance_effective_from
 from app.services.audit_service import save_audit_log, serialize_model
 from app.services.policy_service import SALARY_TYPE_MAP, get_default_work_schedule, get_or_create_payroll_policy
-from app.services.user_service import ResourceConflictException, get_resource_or_404
+from app.services.user_service import ResourceConflictException, get_resource_or_404, verify_admin_password_or_raise
 from app.services.user_service import create_user, serialize_employee
 
 
@@ -421,7 +421,8 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
     return serialize_employee(employee)
 
 
-def delete_employee(id: int, db: Session, *, actor: User | None = None) -> None:
+def delete_employee(id: int, db: Session, *, admin_password: str | None = None, actor: User | None = None) -> None:
+    verify_admin_password_or_raise(actor, admin_password)
     employee = get_resource_or_404(
         db.scalar(select(Employees).options(_employee_query()).where(Employees.id == id, Employees.deleted_at.is_(None))),
         resource_name="Employee",

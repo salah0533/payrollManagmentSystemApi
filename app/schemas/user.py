@@ -107,6 +107,10 @@ class UserResetPasswordRequest(BaseModel):
     must_change_password: bool = True
 
 
+class AdminPasswordConfirmRequest(BaseModel):
+    admin_password: str = Field(..., min_length=1, max_length=255)
+
+
 class EmployeeBasePayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

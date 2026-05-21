@@ -5,7 +5,7 @@ from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_admin
 from app.models.auth import User
-from app.schemas.user import UserCreateRequest, UserResetPasswordRequest, UserRoleAssignRequest, UserUpdateRequest
+from app.schemas.user import AdminPasswordConfirmRequest, UserCreateRequest, UserResetPasswordRequest, UserRoleAssignRequest, UserUpdateRequest
 from app.services.user_service import (
     activate_user,
     assign_roles,
@@ -76,8 +76,13 @@ def deactivate_existing_user(user_id: int, db: Session = Depends(get_db), curren
 
 
 @router.delete("/{user_id}")
-def delete_existing_user(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    delete_user(user_id, db, actor=current_user)
+def delete_existing_user(
+    user_id: int,
+    payload: AdminPasswordConfirmRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    delete_user(user_id, db, admin_password=payload.admin_password, actor=current_user)
     return api_success()
 
 

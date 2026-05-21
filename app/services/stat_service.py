@@ -11,20 +11,28 @@ from app.services.policy_service import get_default_work_schedule, get_employee_
 
 
 def dashboard_attendance_stats(db: Session) -> dict[str, int | float]:
-    total_emps = db.scalar(select(func.count(Employees.id))) or 0
-    total_active_emps = db.scalar(select(func.count(Employees.id)).where(Employees.is_active.is_(True))) or 0
+    active_employee_filter = (
+        Employees.deleted_at.is_(None),
+        Employees.is_active.is_(True),
+    )
+    total_emps = db.scalar(select(func.count(Employees.id)).where(Employees.deleted_at.is_(None))) or 0
+    total_active_emps = db.scalar(select(func.count(Employees.id)).where(*active_employee_filter)) or 0
 
     today = date.today()
     month_start = today.replace(day=1)
     schedule = get_default_work_schedule(db)
-    active_employee_ids = db.scalars(select(Employees.id).where(Employees.is_active.is_(True))).all()
+    active_employee_ids = db.scalars(select(Employees.id).where(*active_employee_filter)).all()
     total_possible = 0
     for employee_id in active_employee_ids:
         holidays = get_employee_holiday_dates(employee_id, month_start, today, db)
         total_possible += len([item for item in get_working_days(month_start, today, schedule, holidays) if item <= today])
 
     monthly_days = db.scalars(
-        select(AttendanceDay).where(
+        select(AttendanceDay)
+        .join(Employees, AttendanceDay.employee_id == Employees.id)
+        .where(
+            Employees.deleted_at.is_(None),
+            Employees.is_active.is_(True),
             AttendanceDay.work_date >= month_start,
             AttendanceDay.work_date <= today,
         )
@@ -72,7 +80,11 @@ def dashboard_attendance_stats(db: Session) -> dict[str, int | float]:
 
     total_att_percent = (credited_days * 100 / total_possible) if total_possible else 0
     total_vacation = db.scalar(
-        select(func.count(Vacation.id)).where(
+        select(func.count(Vacation.id))
+        .join(Employees, Vacation.employee_id == Employees.id)
+        .where(
+            Employees.deleted_at.is_(None),
+            Employees.is_active.is_(True),
             Vacation.vacation_status == int(VacationStatuses.approved),
             Vacation.start_date <= today,
             Vacation.end_date >= today,

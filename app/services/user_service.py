@@ -4,8 +4,8 @@ from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.localization import DEFAULT_LANGUAGE, normalize_language
-from app.core.security import get_password_hash, utc_now
-from app.exceptions.base_exception import BadRequestException, ConflictException, ResourceNotFoundException
+from app.core.security import get_password_hash, utc_now, verify_password
+from app.exceptions.base_exception import BadRequestException, ConflictException, ForbiddenException, ResourceNotFoundException
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
 from app.models.employees import Employees
 from app.schemas.auth import AuthMeEmployee, AuthMeResponse
@@ -286,6 +286,18 @@ def _validate_employee_role_policy(employee_id: int | None, roles: list[Role]) -
         )
 
 
+def verify_admin_password_or_raise(admin: User | None, admin_password: str | None) -> None:
+    if admin is None or not admin.is_active or admin.deleted_at is not None or "admin" not in set(admin.active_role_codes):
+        raise ForbiddenException("Only active admins can perform this action", message_key="errors.forbidden")
+
+    if not admin_password or not verify_password(admin_password, admin.password_hash):
+        raise BadRequestException(
+            "Admin password is incorrect",
+            code="admin_password_invalid",
+            message_key="errors.admin_password_invalid",
+        )
+
+
 def create_user(payload: UserCreateRequest, db: Session, *, actor: User | None = None) -> UserRead:
     ensure_user_language_schema(db)
     _ensure_unique_username(payload.username, db)
@@ -460,7 +472,8 @@ def deactivate_user(user_id: int, db: Session, *, actor: User | None = None) -> 
     return serialize_user(get_user_or_404(user.id, db))
 
 
-def delete_user(user_id: int, db: Session, *, actor: User | None = None) -> None:
+def delete_user(user_id: int, db: Session, *, admin_password: str | None = None, actor: User | None = None) -> None:
+    verify_admin_password_or_raise(actor, admin_password)
     user = get_user_or_404(user_id, db)
     _ensure_not_last_active_admin(user, db)
 

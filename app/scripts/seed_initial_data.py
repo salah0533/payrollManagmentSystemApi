@@ -166,6 +166,7 @@ def seed_attendance_types_or_statuses(db: Session):
         {"id": 8, "code": "weekly_off", "attendence_type": "weekly_off"},
         {"id": 9, "code": "holiday", "attendence_type": "holiday"},
         {"id": 10, "code": "manually_corrected", "attendence_type": "manually_corrected"},
+        {"id": 11, "code": "unpaid", "attendence_type": "unpaid"},
     ]
     for row in rows:
         _upsert_model(db, AttendenceTypes, {"code": row["code"]}, {"id": row["id"], "attendence_type": row["attendence_type"]})
