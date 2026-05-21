@@ -12,7 +12,7 @@ from app.services.payroll_calculation_service import get_employee_payroll_by_per
 
 def _legacy_payment_write_disabled() -> None:
     raise BadRequestException(
-        "Legacy payment writes are disabled. Use /payroll/mark-paid for payments and /payroll/adjustment for bonuses or deductions."
+        "Legacy payment writes are disabled. Use /payroll/mark-paid for payments and /payroll/adjustment for bonuses, deductions, or due settlements."
     )
 
 

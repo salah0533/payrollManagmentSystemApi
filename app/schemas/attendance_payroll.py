@@ -329,7 +329,7 @@ class PayrollAdjustmentCreate(BaseModel):
     employee_id: int
     adjustment_type: str
     amount: Decimal
-    reason: str
+    reason: str = ""
     created_by: Optional[int] = None
 
     @field_validator("adjustment_type")
@@ -350,9 +350,7 @@ class PayrollAdjustmentCreate(BaseModel):
     @field_validator("reason")
     @classmethod
     def validate_reason(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("reason is required")
-        return value.strip()
+        return (value or "").strip()
 
 
 class PayrollAdjustmentUpdate(BaseModel):
@@ -382,8 +380,6 @@ class PayrollAdjustmentUpdate(BaseModel):
     def validate_reason(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
-        if not value.strip():
-            raise ValueError("reason cannot be empty")
         return value.strip()
 
 
@@ -449,6 +445,11 @@ class EmployeePayrollRead(BaseModel):
     attendance_deduction_amount: Decimal = Decimal("0.00")
     manual_deduction_amount: Decimal = Decimal("0.00")
     late_penalty_amount: Decimal = Decimal("0.00")
+    due_settlement_amount: Decimal = Decimal("0.00")
+    employee_due_balance: Decimal = Decimal("0.00")
+    settled_due_amount: Decimal = Decimal("0.00")
+    remaining_due_settlement_amount: Decimal = Decimal("0.00")
+    remaining_due_balance_after_settlement: Decimal = Decimal("0.00")
     calculation_data_json: dict[str, Any] = Field(default_factory=dict)
     needs_review_reason: Optional[str] = None
 

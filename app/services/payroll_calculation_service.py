@@ -44,6 +44,7 @@ MANAGED_DISCREPANCY_TYPES = {
     "vacation_overlap",
 }
 MONTHLY_RATE_REVIEW_MULTIPLIER = Decimal("2.00")
+DUE_SETTLEMENT_ADJUSTMENT_TYPE = "due_settlement"
 
 
 def _utc_now() -> datetime:
@@ -122,8 +123,112 @@ def _apply_payroll_snapshot_fields(payroll: EmployeePayroll, calculation_data_js
     payroll.attendance_deduction_amount = _money(_decimal(snapshot.get("attendance_deduction")))
     payroll.manual_deduction_amount = _money(_decimal(snapshot.get("manual_deduction_amount")))
     payroll.late_penalty_amount = _money(_decimal(snapshot.get("late_penalty_amount"), default=str(_decimal(payroll.late_deduction_amount))))
+    payroll.due_settlement_amount = _money(_decimal(snapshot.get("due_settlement_amount")))
+    payroll.employee_due_balance = _money(_decimal(snapshot.get("employee_due_balance")))
+    payroll.settled_due_amount = _money(_decimal(snapshot.get("settled_due_amount")))
+    payroll.remaining_due_settlement_amount = _money(_decimal(snapshot.get("remaining_due_settlement_amount")))
+    payroll.remaining_due_balance_after_settlement = _money(_decimal(snapshot.get("remaining_due_balance_after_settlement")))
     review_reasons = snapshot.get("needs_review_reasons") or []
     payroll.needs_review_reason = "; ".join(str(item) for item in review_reasons if str(item).strip()) or None
+    return payroll
+
+
+def _sum_adjustments_by_type(adjustments: list[PayrollAdjustment], adjustment_type: str) -> Decimal:
+    return _money(
+        sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == adjustment_type), Decimal("0.00"))
+    )
+
+
+def _get_due_settlement_paid_amount(due_settlement_amount: Decimal, paid_amount: Decimal) -> Decimal:
+    if due_settlement_amount <= Decimal("0.00") or paid_amount <= Decimal("0.00"):
+        return Decimal("0.00")
+    return _money(min(_money(due_settlement_amount), _money(paid_amount)))
+
+
+def _get_due_settlement_remaining_amount(due_settlement_amount: Decimal, paid_amount: Decimal) -> Decimal:
+    return _money(max(Decimal("0.00"), _money(due_settlement_amount) - _get_due_settlement_paid_amount(due_settlement_amount, paid_amount)))
+
+
+def _build_due_state_values(*, employee_due_balance: Decimal, due_settlement_amount: Decimal, paid_amount: Decimal) -> dict[str, Decimal]:
+    current_due_balance = _money(employee_due_balance)
+    due_settlement_total = _money(due_settlement_amount)
+    settled_due_amount = _get_due_settlement_paid_amount(due_settlement_total, paid_amount)
+    remaining_due_settlement_amount = _money(max(Decimal("0.00"), due_settlement_total - settled_due_amount))
+    remaining_due_balance_after_settlement = _money(max(Decimal("0.00"), current_due_balance - remaining_due_settlement_amount))
+    return {
+        "employee_due_balance": current_due_balance,
+        "due_settlement_amount": due_settlement_total,
+        "settled_due_amount": settled_due_amount,
+        "remaining_due_settlement_amount": remaining_due_settlement_amount,
+        "remaining_due_balance_after_settlement": remaining_due_balance_after_settlement,
+    }
+
+
+def _get_employee_due_commitments(employee_id: int, db: Session, *, exclude_adjustment_id: int | None = None) -> dict[int, Decimal]:
+    rows = db.scalars(
+        select(PayrollAdjustment)
+        .options(selectinload(PayrollAdjustment.employee_payroll))
+        .where(
+            PayrollAdjustment.employee_id == employee_id,
+            PayrollAdjustment.adjustment_type == DUE_SETTLEMENT_ADJUSTMENT_TYPE,
+        )
+    ).all()
+
+    totals_by_payroll: dict[int, Decimal] = {}
+    paid_by_payroll: dict[int, Decimal] = {}
+    for row in rows:
+        if exclude_adjustment_id is not None and row.id == exclude_adjustment_id:
+            continue
+        payroll = row.employee_payroll or db.get(EmployeePayroll, row.employee_payroll_id)
+        totals_by_payroll[row.employee_payroll_id] = totals_by_payroll.get(row.employee_payroll_id, Decimal("0.00")) + _decimal(row.amount)
+        paid_by_payroll[row.employee_payroll_id] = _decimal(payroll.paid_amount) if payroll else Decimal("0.00")
+
+    commitments: dict[int, Decimal] = {}
+    for payroll_id, total_amount in totals_by_payroll.items():
+        total_due_settlement = _money(total_amount)
+        commitments[payroll_id] = _money(
+            max(Decimal("0.00"), total_due_settlement - _get_due_settlement_paid_amount(total_due_settlement, paid_by_payroll.get(payroll_id, Decimal("0.00"))))
+        )
+    return commitments
+
+
+def _validate_due_settlement_amount(
+    *,
+    payroll: EmployeePayroll,
+    employee_id: int,
+    amount: Decimal,
+    db: Session,
+    exclude_adjustment_id: int | None = None,
+) -> None:
+    employee = db.get(Employees, employee_id)
+    if not employee or employee.deleted_at is not None:
+        raise ResourceNotFoundException("Employee")
+
+    commitments = _get_employee_due_commitments(employee_id, db, exclude_adjustment_id=exclude_adjustment_id)
+    other_commitments = sum((value for payroll_id, value in commitments.items() if payroll_id != payroll.id), Decimal("0.00"))
+    current_payroll_commitment = commitments.get(payroll.id, Decimal("0.00"))
+    available_due_balance = _money(max(Decimal("0.00"), _money(_decimal(employee.dues)) - _money(other_commitments)))
+    proposed_current_commitment = _money(current_payroll_commitment + _money(_decimal(amount)))
+
+    if proposed_current_commitment > available_due_balance:
+        raise BadRequestException(
+            f"Due settlement amount cannot exceed the employee's available due balance of {available_due_balance}"
+        )
+
+
+def _apply_due_state_fields(payroll: EmployeePayroll, db: Session) -> EmployeePayroll:
+    employee = payroll.employee if getattr(payroll, "employee", None) is not None else db.get(Employees, payroll.employee_id)
+    adjustments = _load_adjustments(payroll.id, db)
+    due_state = _build_due_state_values(
+        employee_due_balance=_decimal(getattr(employee, "dues", 0)),
+        due_settlement_amount=_sum_adjustments_by_type(adjustments, DUE_SETTLEMENT_ADJUSTMENT_TYPE),
+        paid_amount=_decimal(payroll.paid_amount),
+    )
+    payroll.due_settlement_amount = due_state["due_settlement_amount"]
+    payroll.employee_due_balance = due_state["employee_due_balance"]
+    payroll.settled_due_amount = due_state["settled_due_amount"]
+    payroll.remaining_due_settlement_amount = due_state["remaining_due_settlement_amount"]
+    payroll.remaining_due_balance_after_settlement = due_state["remaining_due_balance_after_settlement"]
     return payroll
 
 
@@ -539,11 +644,17 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
     overtime_amount = _money((resolved_rates["resolved_overtime_rate"] / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
 
     adjustments = _load_adjustments(payroll.id, db)
-    bonus_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "bonus"), Decimal("0.00")))
-    manual_deduction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "deduction"), Decimal("0.00")))
-    correction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "correction"), Decimal("0.00")))
+    bonus_amount = _sum_adjustments_by_type(adjustments, "bonus")
+    manual_deduction_amount = _sum_adjustments_by_type(adjustments, "deduction")
+    correction_amount = _sum_adjustments_by_type(adjustments, "correction")
+    due_settlement_amount = _sum_adjustments_by_type(adjustments, DUE_SETTLEMENT_ADJUSTMENT_TYPE)
+    due_state = _build_due_state_values(
+        employee_due_balance=_decimal((payroll.employee or db.get(Employees, payroll.employee_id)).dues),
+        due_settlement_amount=due_settlement_amount,
+        paid_amount=_decimal(payroll.paid_amount),
+    )
 
-    gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
+    gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount + due_settlement_amount)
     earned_deduction_amount = _money(earned_attendance_deduction + manual_deduction_amount)
     deduction_amount = _money(attendance_deduction + manual_deduction_amount)
     earned_net_salary = _money(gross_salary - earned_deduction_amount - late_penalty_amount)
@@ -600,6 +711,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "overtime_amount": str(overtime_amount),
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
+        "due_settlement_amount": str(due_settlement_amount),
         "attendance_deduction": str(attendance_deduction),
         "earned_attendance_deduction": str(earned_attendance_deduction),
         "manual_deduction_amount": str(manual_deduction_amount),
@@ -620,6 +732,10 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "payable_amount": str(amount_snapshot["payable_amount"]),
         "approved_payable_amount": str(amount_snapshot["approved_payable_amount"]),
         "held_for_review_amount": str(amount_snapshot["held_for_review_amount"]),
+        "employee_due_balance": str(due_state["employee_due_balance"]),
+        "settled_due_amount": str(due_state["settled_due_amount"]),
+        "remaining_due_settlement_amount": str(due_state["remaining_due_settlement_amount"]),
+        "remaining_due_balance_after_settlement": str(due_state["remaining_due_balance_after_settlement"]),
         "needs_review_reasons": needs_review_reasons,
     }
     return {
@@ -631,6 +747,7 @@ def calculate_monthly_employee_payroll(payroll: EmployeePayroll, period: Payroll
         "attendance_deduction_amount": attendance_deduction,
         "manual_deduction_amount": manual_deduction_amount,
         "late_penalty_amount": late_penalty_amount,
+        "due_settlement_amount": due_settlement_amount,
         "deduction_amount": deduction_amount,
         "late_deduction_amount": late_penalty_amount,
         "unpaid_vacation_deduction": Decimal("0.00"),
@@ -665,11 +782,17 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
     payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
     overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
     adjustments = _load_adjustments(payroll.id, db)
-    bonus_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "bonus"), Decimal("0.00")))
-    deduction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "deduction"), Decimal("0.00")))
-    correction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "correction"), Decimal("0.00")))
+    bonus_amount = _sum_adjustments_by_type(adjustments, "bonus")
+    deduction_amount = _sum_adjustments_by_type(adjustments, "deduction")
+    correction_amount = _sum_adjustments_by_type(adjustments, "correction")
+    due_settlement_amount = _sum_adjustments_by_type(adjustments, DUE_SETTLEMENT_ADJUSTMENT_TYPE)
+    due_state = _build_due_state_values(
+        employee_due_balance=_decimal(db.get(Employees, payroll.employee_id).dues),
+        due_settlement_amount=due_settlement_amount,
+        paid_amount=_decimal(payroll.paid_amount),
+    )
 
-    gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
+    gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount + due_settlement_amount)
     net_salary = _money(gross_salary - deduction_amount)
     amount_snapshot = _build_payroll_amount_snapshot(earned_net_salary=net_salary)
     calc_data = {
@@ -682,6 +805,7 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "overtime_amount": str(overtime_amount),
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
+        "due_settlement_amount": str(due_settlement_amount),
         "attendance_deduction": "0.00",
         "manual_deduction_amount": str(deduction_amount),
         "deduction_amount": str(deduction_amount),
@@ -695,6 +819,10 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "payable_amount": str(amount_snapshot["payable_amount"]),
         "approved_payable_amount": str(amount_snapshot["approved_payable_amount"]),
         "held_for_review_amount": str(amount_snapshot["held_for_review_amount"]),
+        "employee_due_balance": str(due_state["employee_due_balance"]),
+        "settled_due_amount": str(due_state["settled_due_amount"]),
+        "remaining_due_settlement_amount": str(due_state["remaining_due_settlement_amount"]),
+        "remaining_due_balance_after_settlement": str(due_state["remaining_due_balance_after_settlement"]),
     }
     return {
         "salary_type": compensation.salary_type,
@@ -705,6 +833,7 @@ def calculate_daily_employee_payroll(payroll: EmployeePayroll, period: PayrollPe
         "attendance_deduction_amount": Decimal("0.00"),
         "manual_deduction_amount": deduction_amount,
         "late_penalty_amount": Decimal("0.00"),
+        "due_settlement_amount": due_settlement_amount,
         "deduction_amount": deduction_amount,
         "late_deduction_amount": Decimal("0.00"),
         "unpaid_vacation_deduction": Decimal("0.00"),
@@ -725,11 +854,17 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
     payable_overtime_minutes = summary["overtime_minutes"] if summary["overtime_minutes"] >= int(policy.minimum_overtime_minutes or 0) else 0
     overtime_amount = _money((_decimal(compensation.overtime_rate) / Decimal("60")) * Decimal(payable_overtime_minutes)) if policy.overtime_enabled else Decimal("0.00")
     adjustments = _load_adjustments(payroll.id, db)
-    bonus_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "bonus"), Decimal("0.00")))
-    deduction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "deduction"), Decimal("0.00")))
-    correction_amount = _money(sum((_decimal(item.amount) for item in adjustments if item.adjustment_type == "correction"), Decimal("0.00")))
+    bonus_amount = _sum_adjustments_by_type(adjustments, "bonus")
+    deduction_amount = _sum_adjustments_by_type(adjustments, "deduction")
+    correction_amount = _sum_adjustments_by_type(adjustments, "correction")
+    due_settlement_amount = _sum_adjustments_by_type(adjustments, DUE_SETTLEMENT_ADJUSTMENT_TYPE)
+    due_state = _build_due_state_values(
+        employee_due_balance=_decimal(db.get(Employees, payroll.employee_id).dues),
+        due_settlement_amount=due_settlement_amount,
+        paid_amount=_decimal(payroll.paid_amount),
+    )
 
-    gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount)
+    gross_salary = _money(normal_amount + overtime_amount + bonus_amount + correction_amount + due_settlement_amount)
     net_salary = _money(gross_salary - deduction_amount)
     amount_snapshot = _build_payroll_amount_snapshot(earned_net_salary=net_salary)
     calc_data = {
@@ -739,6 +874,7 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "overtime_amount": str(overtime_amount),
         "payable_overtime_minutes": payable_overtime_minutes,
         "bonus_amount": str(bonus_amount),
+        "due_settlement_amount": str(due_settlement_amount),
         "attendance_deduction": "0.00",
         "manual_deduction_amount": str(deduction_amount),
         "deduction_amount": str(deduction_amount),
@@ -752,6 +888,10 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "payable_amount": str(amount_snapshot["payable_amount"]),
         "approved_payable_amount": str(amount_snapshot["approved_payable_amount"]),
         "held_for_review_amount": str(amount_snapshot["held_for_review_amount"]),
+        "employee_due_balance": str(due_state["employee_due_balance"]),
+        "settled_due_amount": str(due_state["settled_due_amount"]),
+        "remaining_due_settlement_amount": str(due_state["remaining_due_settlement_amount"]),
+        "remaining_due_balance_after_settlement": str(due_state["remaining_due_balance_after_settlement"]),
     }
     return {
         "salary_type": compensation.salary_type,
@@ -762,6 +902,7 @@ def calculate_hourly_employee_payroll(payroll: EmployeePayroll, period: PayrollP
         "attendance_deduction_amount": Decimal("0.00"),
         "manual_deduction_amount": deduction_amount,
         "late_penalty_amount": Decimal("0.00"),
+        "due_settlement_amount": due_settlement_amount,
         "deduction_amount": deduction_amount,
         "late_deduction_amount": Decimal("0.00"),
         "unpaid_vacation_deduction": Decimal("0.00"),
@@ -1091,6 +1232,7 @@ def calculate_employee_payroll(
     )
     db.flush()
     _apply_payroll_snapshot_fields(payroll, results["calculation_data_json"])
+    _apply_due_state_fields(payroll, db)
     _notify_payroll_backoffice_status(payroll, db)
     return payroll
 
@@ -1399,6 +1541,8 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
 
     old_status = payroll.status
     latest_snapshot = _latest_payroll_snapshot(payroll.id, db)
+    employee = db.get(Employees, payroll.employee_id)
+    due_settlement_amount = _sum_adjustments_by_type(_load_adjustments(payroll.id, db), DUE_SETTLEMENT_ADJUSTMENT_TYPE)
     released_payable_amount = _money(
         _decimal(latest_snapshot.get("approved_payable_amount"), default=str(_decimal(payroll.net_salary)))
     )
@@ -1412,6 +1556,14 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
         reason="payroll_approved",
         calculation_data_json={
             **latest_snapshot,
+            **{
+                key: str(value)
+                for key, value in _build_due_state_values(
+                    employee_due_balance=_decimal(getattr(employee, "dues", 0)),
+                    due_settlement_amount=due_settlement_amount,
+                    paid_amount=_decimal(payroll.paid_amount),
+                ).items()
+            },
             "status_before": old_status,
             "status_after": payroll.status,
             "payable_amount": str(released_payable_amount),
@@ -1447,11 +1599,20 @@ def approve_employee_payroll(employee_payroll_id: int, db: Session, approved_by:
         payroll,
         {
             **latest_snapshot,
+            **{
+                key: str(value)
+                for key, value in _build_due_state_values(
+                    employee_due_balance=_decimal(getattr(employee, "dues", 0)),
+                    due_settlement_amount=due_settlement_amount,
+                    paid_amount=_decimal(payroll.paid_amount),
+                ).items()
+            },
             "payable_amount": str(released_payable_amount),
             "approved_payable_amount": str(released_payable_amount),
             "held_for_review_amount": "0.00",
         },
     )
+    _apply_due_state_fields(payroll, db)
     return payroll
 
 
@@ -1506,6 +1667,7 @@ def unapprove_employee_payroll(employee_payroll_id: int, db: Session, unapproved
     db.commit()
     db.refresh(payroll)
     _apply_payroll_snapshot_fields(payroll, base_snapshot)
+    _apply_due_state_fields(payroll, db)
     return payroll
 
 
@@ -1535,12 +1697,20 @@ def reopen_locked_employee_payroll(
     old_balance_amount = _decimal(payroll.balance_amount)
     old_paid_at = payroll.paid_at
     old_approved_at = payroll.approved_at
+    employee = db.get(Employees, payroll.employee_id)
+    due_settlement_amount = _sum_adjustments_by_type(_load_adjustments(payroll.id, db), DUE_SETTLEMENT_ADJUSTMENT_TYPE)
+    old_settled_due_amount = _get_due_settlement_paid_amount(due_settlement_amount, old_paid_amount)
 
     base_snapshot = _latest_non_settlement_payroll_snapshot(payroll.id, db)
     open_items = detect_payroll_discrepancies(payroll.employee_id, payroll.payroll_period_id, db)
     payable_amount = _money(_decimal(base_snapshot.get("payable_amount"), default=str(_decimal(payroll.net_salary))))
 
     payroll.paid_amount = _money(_decimal(payroll.paid_amount) - reversed_amount)
+    new_settled_due_amount = _get_due_settlement_paid_amount(due_settlement_amount, _decimal(payroll.paid_amount))
+    reversed_due_amount = _money(max(Decimal("0.00"), old_settled_due_amount - new_settled_due_amount))
+    if employee is not None and reversed_due_amount > Decimal("0.00"):
+        employee.dues = _money(_decimal(employee.dues) + reversed_due_amount)
+        db.add(employee)
     payroll.status = "needs_review" if any(item.status == "open" for item in open_items) or (base_snapshot.get("needs_review_reasons") or []) else "draft"
     payroll.paid_at = None
     payroll.approved_at = None
@@ -1568,9 +1738,18 @@ def reopen_locked_employee_payroll(
         reason="payroll_reopened",
         calculation_data_json={
             **base_snapshot,
+            **{
+                key: str(value)
+                for key, value in _build_due_state_values(
+                    employee_due_balance=_decimal(getattr(employee, "dues", 0)),
+                    due_settlement_amount=due_settlement_amount,
+                    paid_amount=_decimal(payroll.paid_amount),
+                ).items()
+            },
             "status_before": old_status,
             "status_after": payroll.status,
             "reversed_payment_amount": str(reversed_amount),
+            "reversed_due_amount": str(reversed_due_amount),
             "old_paid_amount": str(old_paid_amount),
             "new_paid_amount": str(payroll.paid_amount),
             "old_balance_amount": str(old_balance_amount),
@@ -1609,6 +1788,7 @@ def reopen_locked_employee_payroll(
     db.commit()
     db.refresh(payroll)
     _apply_payroll_snapshot_fields(payroll, base_snapshot)
+    _apply_due_state_fields(payroll, db)
     return payroll
 
 
@@ -1633,6 +1813,9 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
     old_balance_amount = _decimal(payroll.balance_amount)
     _sync_payroll_balance(payroll)
     latest_snapshot = _latest_payroll_snapshot(payroll.id, db)
+    employee = db.get(Employees, payroll.employee_id)
+    due_settlement_amount = _sum_adjustments_by_type(_load_adjustments(payroll.id, db), DUE_SETTLEMENT_ADJUSTMENT_TYPE)
+    old_settled_due_amount = _get_due_settlement_paid_amount(due_settlement_amount, old_paid_amount)
 
     payment_amount = _money(_decimal(amount)) if amount is not None else payroll.balance_amount
     if payment_amount == Decimal("0.00"):
@@ -1643,6 +1826,11 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
         raise BadRequestException("Payment amount cannot exceed the remaining payroll balance", message_key="errors.payment_amount_exceeds_balance")
 
     payroll.paid_amount = _money(payroll.paid_amount + payment_amount)
+    new_settled_due_amount = _get_due_settlement_paid_amount(due_settlement_amount, _decimal(payroll.paid_amount))
+    newly_settled_due_amount = _money(max(Decimal("0.00"), new_settled_due_amount - old_settled_due_amount))
+    if employee is not None and newly_settled_due_amount > Decimal("0.00"):
+        employee.dues = _money(max(Decimal("0.00"), _decimal(employee.dues) - newly_settled_due_amount))
+        db.add(employee)
     _sync_payroll_balance(payroll)
 
     policy = get_or_create_payroll_policy(db)
@@ -1670,9 +1858,18 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
         reason="payroll_payment_recorded",
         calculation_data_json={
             **latest_snapshot,
+            **{
+                key: str(value)
+                for key, value in _build_due_state_values(
+                    employee_due_balance=_decimal(getattr(employee, "dues", 0)),
+                    due_settlement_amount=due_settlement_amount,
+                    paid_amount=_decimal(payroll.paid_amount),
+                ).items()
+            },
             "status_before": old_status,
             "status_after": payroll.status,
             "payment_amount": str(payment_amount),
+            "newly_settled_due_amount": str(newly_settled_due_amount),
             "old_paid_amount": str(old_paid_amount),
             "new_paid_amount": str(payroll.paid_amount),
             "old_balance_amount": str(old_balance_amount),
@@ -1714,6 +1911,7 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
     )
     db.commit()
     db.refresh(payroll)
+    _apply_due_state_fields(payroll, db)
     return payroll
 
 
@@ -1744,6 +1942,17 @@ def add_payroll_adjustment(payload, db: Session):
     payroll = db.get(EmployeePayroll, payload.employee_payroll_id)
     if not payroll:
         raise ResourceNotFoundException("Employee payroll")
+    if payroll.employee_id != payload.employee_id:
+        raise BadRequestException("Payroll row does not belong to the provided employee")
+    if payroll.payroll_period_id != payload.payroll_period_id:
+        raise BadRequestException("Payroll row does not belong to the provided payroll period")
+    if payload.adjustment_type == DUE_SETTLEMENT_ADJUSTMENT_TYPE:
+        _validate_due_settlement_amount(
+            payroll=payroll,
+            employee_id=payload.employee_id,
+            amount=payload.amount,
+            db=db,
+        )
 
     adjustment = PayrollAdjustment(
         employee_payroll_id=payload.employee_payroll_id,
@@ -1823,6 +2032,16 @@ def update_payroll_adjustment(adjustment_id: int, payload, db: Session, updated_
     }
 
     update_data = payload.model_dump(exclude_unset=True)
+    next_adjustment_type = update_data.get("adjustment_type", adjustment.adjustment_type)
+    next_amount = update_data.get("amount", adjustment.amount)
+    if next_adjustment_type == DUE_SETTLEMENT_ADJUSTMENT_TYPE:
+        _validate_due_settlement_amount(
+            payroll=payroll,
+            employee_id=adjustment.employee_id,
+            amount=_decimal(next_amount),
+            db=db,
+            exclude_adjustment_id=adjustment.id,
+        )
     for key, value in update_data.items():
         if value is not None:
             setattr(adjustment, key, value)
@@ -1898,7 +2117,8 @@ def _latest_payroll_snapshot(employee_payroll_id: int, db: Session) -> dict:
 
 
 def _hydrate_payroll_snapshot(payroll: EmployeePayroll, db: Session) -> EmployeePayroll:
-    return _apply_payroll_snapshot_fields(payroll, _latest_payroll_snapshot(payroll.id, db))
+    _apply_payroll_snapshot_fields(payroll, _latest_payroll_snapshot(payroll.id, db))
+    return _apply_due_state_fields(payroll, db)
 
 
 def _serialize_employee_payroll(payroll: EmployeePayroll) -> dict:
@@ -1929,6 +2149,11 @@ def _serialize_employee_payroll(payroll: EmployeePayroll) -> dict:
         "attendance_deduction_amount": _money(_decimal(getattr(payroll, "attendance_deduction_amount", None))),
         "manual_deduction_amount": _money(_decimal(getattr(payroll, "manual_deduction_amount", None))),
         "late_penalty_amount": _money(_decimal(getattr(payroll, "late_penalty_amount", None))),
+        "due_settlement_amount": _money(_decimal(getattr(payroll, "due_settlement_amount", None))),
+        "employee_due_balance": _money(_decimal(getattr(payroll, "employee_due_balance", None))),
+        "settled_due_amount": _money(_decimal(getattr(payroll, "settled_due_amount", None))),
+        "remaining_due_settlement_amount": _money(_decimal(getattr(payroll, "remaining_due_settlement_amount", None))),
+        "remaining_due_balance_after_settlement": _money(_decimal(getattr(payroll, "remaining_due_balance_after_settlement", None))),
         "calculation_data_json": payroll.calculation_data_json or {},
         "needs_review_reason": getattr(payroll, "needs_review_reason", None),
     }

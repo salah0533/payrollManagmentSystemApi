@@ -106,7 +106,7 @@ ATTENDANCE_STATUS_CODES = (
 
 PAYROLL_PERIOD_STATUS_CODES = ("draft", "reviewed", "approved", "paid", "locked", "cancelled")
 EMPLOYEE_PAYROLL_STATUS_CODES = ("draft", "needs_review", "approved", "partially_paid", "paid", "locked")
-PAYROLL_ADJUSTMENT_TYPE_CODES = ("bonus", "deduction", "correction")
+PAYROLL_ADJUSTMENT_TYPE_CODES = ("bonus", "deduction", "correction", "due_settlement")
 PAYROLL_DISCREPANCY_TYPE_CODES = (
     "missing_checkout",
     "missing_checkin",
