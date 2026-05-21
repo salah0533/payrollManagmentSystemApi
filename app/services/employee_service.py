@@ -427,9 +427,10 @@ def delete_employee(id: int, db: Session, *, actor: User | None = None) -> None:
         resource_name="Employee",
         identifier=id,
     )
-    if employee.user_account and employee.user_account.deleted_at is None:
+    linked_user = employee.user_account
+    if linked_user and linked_user.deleted_at is None:
         raise ResourceConflictException(
-            "Employee has a linked user account. Disable or unlink the account before deleting the employee.",
+            "Employee has a linked user account. Delete or unlink the account before deleting the employee.",
             code="employee_has_linked_user_account",
             message_key="errors.employee_already_linked",
         )

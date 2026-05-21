@@ -4,7 +4,7 @@ from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.localization import DEFAULT_LANGUAGE, normalize_language
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, utc_now
 from app.exceptions.base_exception import BadRequestException, ConflictException, ResourceNotFoundException
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
 from app.models.employees import Employees
@@ -458,6 +458,28 @@ def deactivate_user(user_id: int, db: Session, *, actor: User | None = None) -> 
     save_audit_log(db, action="user_disabled", entity_type="User", entity_id=user.id, user_id=actor.id if actor else None)
     db.commit()
     return serialize_user(get_user_or_404(user.id, db))
+
+
+def delete_user(user_id: int, db: Session, *, actor: User | None = None) -> None:
+    user = get_user_or_404(user_id, db)
+    _ensure_not_last_active_admin(user, db)
+
+    old_data = serialize_model(user, fields=("username", "email", "employee_id", "language", "is_active", "must_change_password"))
+    user.deleted_at = utc_now()
+    user.is_active = False
+    user.employee_id = None
+    db.add(user)
+    db.flush()
+    save_audit_log(
+        db,
+        action="user_deleted",
+        entity_type="User",
+        entity_id=user.id,
+        old_data_json=old_data,
+        new_data_json={"deleted_at": str(user.deleted_at), "is_active": user.is_active, "employee_id": None},
+        user_id=actor.id if actor else None,
+    )
+    db.commit()
 
 
 def assign_roles(user_id: int, role_ids: list[int], db: Session, *, actor: User | None = None) -> UserRead:

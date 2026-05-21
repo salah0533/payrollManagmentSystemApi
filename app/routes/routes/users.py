@@ -11,6 +11,7 @@ from app.services.user_service import (
     assign_roles,
     create_user,
     deactivate_user,
+    delete_user,
     get_user_or_404,
     list_employees_without_accounts,
     list_roles,
@@ -72,6 +73,12 @@ def activate_existing_user(user_id: int, db: Session = Depends(get_db), current_
 @router.post("/{user_id}/deactivate")
 def deactivate_existing_user(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return api_success(deactivate_user(user_id, db, actor=current_user))
+
+
+@router.delete("/{user_id}")
+def delete_existing_user(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    delete_user(user_id, db, actor=current_user)
+    return api_success()
 
 
 @router.post("/{user_id}/roles")
