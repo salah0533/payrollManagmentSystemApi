@@ -45,7 +45,7 @@ def ensure_employee_auto_attendance_schema(db: Session) -> None:
         db.execute(
             text(
                 "ALTER TABLE employees "
-                "ADD COLUMN auto_attendance_enabled BOOLEAN NOT NULL DEFAULT 0"
+                "ADD COLUMN auto_attendance_enabled BOOLEAN NOT NULL DEFAULT FALSE"
             )
         )
     if "auto_attendance_effective_from" not in existing_columns:
@@ -58,9 +58,11 @@ def ensure_employee_auto_attendance_schema(db: Session) -> None:
     db.execute(
         text(
             "UPDATE employees "
-            "SET auto_attendance_enabled = COALESCE(auto_attendance_enabled, 0)"
+            "SET auto_attendance_enabled = COALESCE(auto_attendance_enabled, FALSE)"
         )
     )
+    db.execute(text("ALTER TABLE employees ALTER COLUMN auto_attendance_enabled SET DEFAULT FALSE"))
+    db.execute(text("ALTER TABLE employees ALTER COLUMN auto_attendance_enabled SET NOT NULL"))
     db.flush()
 
 

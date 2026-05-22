@@ -36,7 +36,7 @@ Create a `.env` file in the project root.
 Example:
 
 ```env
-DATABASE_URL=sqlite:///./app.db
+DATABASE_URL=postgresql+psycopg://payrollpro:payrollpro@localhost:5432/payrollpro
 JWT_SECRET_KEY=change-me-in-production
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
@@ -54,7 +54,7 @@ You can also copy the values from `.env.example`.
 
 Environment variables:
 
-- `DATABASE_URL`: SQLAlchemy connection string.
+- `DATABASE_URL`: SQLAlchemy connection string. Current default is PostgreSQL on `localhost:5432` using database `payrollpro`.
 - `JWT_SECRET_KEY`: signing key for JWT tokens.
 - `JWT_ALGORITHM`: JWT signing algorithm.
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: access token lifetime in minutes.

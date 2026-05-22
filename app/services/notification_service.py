@@ -50,7 +50,7 @@ def ensure_notification_localization_schema(db: Session) -> None:
     if "translation_params_json" not in existing_columns:
         db.execute(text("ALTER TABLE notifications ADD COLUMN translation_params_json JSON"))
     if "is_system_content" not in existing_columns:
-        db.execute(text("ALTER TABLE notifications ADD COLUMN is_system_content BOOLEAN NOT NULL DEFAULT 0"))
+        db.execute(text("ALTER TABLE notifications ADD COLUMN is_system_content BOOLEAN NOT NULL DEFAULT FALSE"))
     db.flush()
 
 

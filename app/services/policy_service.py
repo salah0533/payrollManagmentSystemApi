@@ -127,7 +127,7 @@ def _ensure_payroll_policy_schema(db: Session) -> None:
         db.execute(
             text(
                 "ALTER TABLE payroll_policy "
-                "ADD COLUMN allow_vacation_carryover BOOLEAN NOT NULL DEFAULT 1"
+                "ADD COLUMN allow_vacation_carryover BOOLEAN NOT NULL DEFAULT TRUE"
             )
         )
     if "max_vacation_carryover_days" not in existing_columns:
@@ -155,7 +155,7 @@ def _ensure_payroll_policy_schema(db: Session) -> None:
         db.execute(
             text(
                 "ALTER TABLE payroll_policy "
-                "ADD COLUMN reserve_vacation_days_on_pending BOOLEAN NOT NULL DEFAULT 0"
+                "ADD COLUMN reserve_vacation_days_on_pending BOOLEAN NOT NULL DEFAULT FALSE"
             )
         )
     if "monthly_payroll_calculation_mode" not in existing_columns:

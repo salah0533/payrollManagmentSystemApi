@@ -115,6 +115,10 @@ Configure the backend in `.env`:
 
 `CORS_ORIGINS` accepts a comma-separated list such as `http://localhost:3000,http://127.0.0.1:8080`.
 
+Example PostgreSQL connection:
+
+- `DATABASE_URL=postgresql+psycopg://payrollpro:payrollpro@localhost:5432/payrollpro`
+
 Use these backend launchers:
 
 - `python -m app.run_dev`: development mode with auto-reload.

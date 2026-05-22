@@ -26,7 +26,11 @@ def _get_env_csv(key: str, default: list[str]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = field(default_factory=lambda: _get_env_str("DATABASE_URL", "sqlite:///./app.db"))
+    database_url: str = field(
+        default_factory=lambda: _get_env_str(
+            "DATABASE_URL", "postgresql+psycopg://payrollpro:payrollpro@localhost:5432/payrollpro"
+        )
+    )
     jwt_secret_key: str = field(
         default_factory=lambda: _get_env_str("JWT_SECRET_KEY", "development-jwt-secret-change-me")
     )
