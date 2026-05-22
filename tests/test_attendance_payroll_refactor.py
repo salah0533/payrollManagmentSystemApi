@@ -1514,6 +1514,35 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(latest_history.calculation_data_json["employee_due_balance"], "200.00")
         self.assertEqual(latest_history.calculation_data_json["remaining_due_balance_after_settlement"], "160.00")
 
+    def test_updating_employee_overtime_rate_recalculates_existing_draft_payroll(self):
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days(overtime_minutes_by_date={date(2026, 5, 4): 120}):
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        self.assertEqual(payroll.overtime_amount, Decimal("5200.00"))
+
+        with patch("app.services.employee_service.date", wraps=date) as mocked_date:
+            mocked_date.today.return_value = date(2026, 5, 15)
+            update_employee(
+                self.employee.id,
+                EmployeeUpdateRequest(extra_hours_price=Decimal("3000.00")),
+                self.db,
+                actor=SimpleNamespace(id=99),
+            )
+
+        refreshed = get_employee_payroll_by_period(self.employee.id, period.id, self.db)
+        latest_history = self.db.scalar(
+            select(PayrollCalculationHistory)
+            .where(PayrollCalculationHistory.employee_payroll_id == refreshed.id)
+            .order_by(PayrollCalculationHistory.created_at.desc(), PayrollCalculationHistory.id.desc())
+        )
+
+        self.assertEqual(refreshed.overtime_amount, Decimal("6000.00"))
+        self.assertEqual(latest_history.reason, "employee_compensation_updated")
+        self.assertEqual(Decimal(latest_history.calculation_data_json["resolved_overtime_rate"]), Decimal("3000.00"))
+
     def test_payment_succeeds_with_only_medium_discrepancies_when_approved(self):
         period = self._payroll_period_for_month(2026, 5)
         for day in self._month_days():

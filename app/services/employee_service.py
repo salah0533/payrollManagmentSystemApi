@@ -393,11 +393,20 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
     _sync_employee_auto_attendance(employee, payload, db)
     db.add(employee)
     db.flush()
-    if any(
+    compensation_changed = any(
         getattr(employee, key) != previous_compensation_state[key]
         for key in previous_compensation_state
-    ):
+    )
+    if compensation_changed:
         _sync_employee_compensation_record(employee, db, actor=actor, effective_from=date.today())
+        from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_employee_compensation_change
+
+        reconcile_existing_payrolls_for_employee_compensation_change(
+            employee.id,
+            db,
+            reason="employee_compensation_updated",
+            created_by=actor.id if actor else None,
+        )
     if employee.dues != previous_due_balance:
         from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_employee_due_change
 
