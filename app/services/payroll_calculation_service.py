@@ -1305,6 +1305,54 @@ def reconcile_existing_payrolls_for_settings_change(
     return summary
 
 
+def reconcile_existing_payrolls_for_employee_compensation_change(
+    employee_id: int,
+    db: Session,
+    *,
+    reason: str = "employee_compensation_updated",
+    created_by: int | None = None,
+) -> dict[str, int]:
+    employee = db.get(Employees, employee_id)
+    if not employee:
+        raise ResourceNotFoundException("Employee")
+
+    payrolls = db.scalars(
+        select(EmployeePayroll)
+        .options(selectinload(EmployeePayroll.payroll_period))
+        .where(EmployeePayroll.employee_id == employee_id)
+        .order_by(EmployeePayroll.payroll_period_id.asc(), EmployeePayroll.id.asc())
+    ).all()
+
+    summary = {
+        "recalculated": 0,
+        "reconciled": 0,
+        "skipped": 0,
+    }
+
+    for payroll in payrolls:
+        period = payroll.payroll_period
+        if not period or period.status == "cancelled":
+            summary["skipped"] += 1
+            continue
+
+        if payroll.status in FINAL_PAYROLL_STATUSES or period.status in FINAL_PAYROLL_STATUSES:
+            detect_payroll_discrepancies(payroll.employee_id, payroll.payroll_period_id, db)
+            summary["reconciled"] += 1
+            continue
+
+        calculate_employee_payroll(
+            employee_id=payroll.employee_id,
+            payroll_period_id=payroll.payroll_period_id,
+            db=db,
+            reason=reason,
+            created_by=created_by,
+            force_history=True,
+        )
+        summary["recalculated"] += 1
+
+    return summary
+
+
 def reconcile_existing_payrolls_for_employee_due_change(
     employee_id: int,
     db: Session,
