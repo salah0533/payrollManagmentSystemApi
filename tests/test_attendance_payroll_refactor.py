@@ -40,6 +40,7 @@ from app.services.attendance_calculation_service import (
     get_attendance_days,
     get_attendance_days_by_date,
     process_pending_attendance_notifications,
+    validate_attendance_event,
 )
 from app.services.employee_service import update_employee
 from app.services.payroll_calculation_service import (
@@ -68,6 +69,8 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.db.add_all(
             [
                 SalaryType(id=0, code="monthly", salary_type="monthly"),
+                SalaryType(id=1, code="daily", salary_type="daily"),
+                SalaryType(id=2, code="hourly", salary_type="hourly"),
                 PaymentTypes(id=0, code="payment", payment_type="payment"),
                 WorkSchedule(
                     name="Default Schedule",
@@ -193,6 +196,37 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.db.add(payroll)
         self.db.flush()
         return payroll
+
+    def _create_employee_with_salary_type(self, salary_type: int, name: str = "Variable") -> Employees:
+        employee = Employees(
+            first_name=name,
+            last_name="Employee",
+            fullname=f"{name} Employee",
+            job_title="Engineer",
+            phone=f"555000{salary_type}",
+            email=f"{name.lower()}-{salary_type}@example.com",
+            department_id=None,
+            position_id=None,
+            position=None,
+            status="active",
+            hire_date=date(2026, 1, 1),
+            dues=Decimal("0.00"),
+            salary_type=salary_type,
+            monthly_price=Decimal("0.00") if salary_type != 0 else Decimal("85000.00"),
+            day_price=Decimal("5000.00") if salary_type == 1 else Decimal("0.00"),
+            hour_price=Decimal("650.00") if salary_type == 2 else Decimal("0.00"),
+            extra_hours_price=Decimal("800.00"),
+            daily_work_hours=8,
+            vacation_days=0,
+            is_active=True,
+            allowed_late=Decimal("0.00"),
+            min_extraTime=Decimal("0.00"),
+            joined=date(2026, 1, 1),
+        )
+        self.db.add(employee)
+        self.db.commit()
+        self.db.refresh(employee)
+        return employee
 
     def test_timezone_boundary_uses_schedule_timezone_for_work_date(self):
         schedule = self._schedule()
@@ -1171,6 +1205,45 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual([row.employee_id for row in rows], [self.employee.id])
         self.assertEqual(rows[0].status, "weekly_off")
 
+    def test_daily_employee_range_read_does_not_materialize_weekly_off_rows(self):
+        daily_employee = self._create_employee_with_salary_type(1, "Daily")
+
+        rows = get_attendance_days(daily_employee.id, date(2026, 5, 1), date(2026, 5, 3), self.db)
+
+        self.assertEqual(rows, [])
+        stored_rows = self.db.scalars(
+            select(AttendanceDay).where(
+                AttendanceDay.employee_id == daily_employee.id,
+                AttendanceDay.work_date >= date(2026, 5, 1),
+                AttendanceDay.work_date <= date(2026, 5, 3),
+            )
+        ).all()
+        self.assertEqual(stored_rows, [])
+
+    def test_hourly_employee_range_read_does_not_materialize_weekly_off_rows(self):
+        hourly_employee = self._create_employee_with_salary_type(2, "Hourly")
+
+        rows = get_attendance_days(hourly_employee.id, date(2026, 5, 1), date(2026, 5, 3), self.db)
+
+        self.assertEqual(rows, [])
+
+    def test_daily_read_materializes_weekly_off_rows_for_monthly_employees_only(self):
+        daily_employee = self._create_employee_with_salary_type(1, "Daily")
+        hourly_employee = self._create_employee_with_salary_type(2, "Hourly")
+
+        rows = get_attendance_days_by_date(date(2026, 5, 1), self.db)
+
+        self.assertEqual([row.employee_id for row in rows], [self.employee.id])
+        self.assertEqual(rows[0].status, "weekly_off")
+        self.assertIsNone(
+            self.db.scalar(
+                select(AttendanceDay).where(
+                    AttendanceDay.employee_id.in_([daily_employee.id, hourly_employee.id]),
+                    AttendanceDay.work_date == date(2026, 5, 1),
+                )
+            )
+        )
+
     def test_weekly_off_materialization_is_idempotent_and_does_not_create_payroll_history(self):
         before_history_count = len(self.db.scalars(select(PayrollCalculationHistory)).all())
 
@@ -1222,6 +1295,150 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         self.assertEqual(day.unpaid_minutes, 480)
         self.assertEqual(day.normal_paid_minutes, 0)
         self.assertEqual(day.absence_minutes, 0)
+
+    def test_daily_employee_recalculation_on_schedule_weekly_off_is_absent_not_weekly_off(self):
+        daily_employee = self._create_employee_with_salary_type(1, "Daily")
+
+        day = calculate_attendance_day(daily_employee.id, date(2026, 5, 1), self.db)
+
+        self.assertEqual(day.status, "absent")
+        self.assertEqual(day.expected_work_minutes, 480)
+        self.assertEqual(day.unpaid_minutes, 480)
+        self.assertEqual(day.absence_minutes, 480)
+
+    def test_hourly_employee_recalculation_on_schedule_weekly_off_is_absent_not_weekly_off(self):
+        hourly_employee = self._create_employee_with_salary_type(2, "Hourly")
+
+        day = calculate_attendance_day(hourly_employee.id, date(2026, 5, 1), self.db)
+
+        self.assertEqual(day.status, "absent")
+        self.assertEqual(day.expected_work_minutes, 480)
+        self.assertEqual(day.unpaid_minutes, 480)
+        self.assertEqual(day.absence_minutes, 480)
+
+    def test_daily_employee_attendance_on_schedule_weekly_off_is_normal_attendance(self):
+        daily_employee = self._create_employee_with_salary_type(1, "Daily")
+
+        validation = validate_attendance_event(
+            daily_employee.id,
+            "check_in",
+            datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+        create_attendance_event(
+            daily_employee.id,
+            "check_in",
+            datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+        _, day = create_attendance_event(
+            daily_employee.id,
+            "check_out",
+            datetime(2026, 5, 1, 17, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+
+        self.assertIsNone(validation["warning"])
+        self.assertEqual(day.status, "present")
+        self.assertEqual(day.expected_work_minutes, 480)
+        self.assertEqual(day.normal_paid_minutes, 480)
+        self.assertEqual(day.overtime_minutes, 0)
+        self.assertEqual(day.unpaid_minutes, 0)
+
+    def test_hourly_employee_attendance_on_schedule_weekly_off_is_normal_attendance(self):
+        hourly_employee = self._create_employee_with_salary_type(2, "Hourly")
+
+        validation = validate_attendance_event(
+            hourly_employee.id,
+            "check_in",
+            datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+        create_attendance_event(
+            hourly_employee.id,
+            "check_in",
+            datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+        _, day = create_attendance_event(
+            hourly_employee.id,
+            "check_out",
+            datetime(2026, 5, 1, 17, 0, tzinfo=timezone.utc),
+            self.db,
+        )
+
+        self.assertIsNone(validation["warning"])
+        self.assertEqual(day.status, "present")
+        self.assertEqual(day.expected_work_minutes, 480)
+        self.assertEqual(day.normal_paid_minutes, 480)
+        self.assertEqual(day.overtime_minutes, 0)
+        self.assertEqual(day.unpaid_minutes, 0)
+
+    def test_daily_employee_schedule_weekly_off_cannot_be_corrected_to_weekly_off(self):
+        daily_employee = self._create_employee_with_salary_type(1, "Daily")
+
+        with self.assertRaises(BadRequestException):
+            apply_smart_attendance_status_correction(
+                daily_employee.id,
+                date(2026, 5, 1),
+                "weekly_off",
+                corrected_by=1,
+                reason="Daily employee should not get weekly off",
+                options={},
+                db=self.db,
+            )
+        self.db.rollback()
+
+    def test_hourly_employee_schedule_weekly_off_cannot_be_corrected_to_weekly_off(self):
+        hourly_employee = self._create_employee_with_salary_type(2, "Hourly")
+
+        with self.assertRaises(BadRequestException):
+            apply_smart_attendance_status_correction(
+                hourly_employee.id,
+                date(2026, 5, 1),
+                "weekly_off",
+                corrected_by=1,
+                reason="Hourly employee should not get weekly off",
+                options={},
+                db=self.db,
+            )
+        self.db.rollback()
+
+    def test_daily_employee_schedule_weekly_off_can_be_corrected_to_absent(self):
+        daily_employee = self._create_employee_with_salary_type(1, "Daily")
+
+        correction, day = apply_smart_attendance_status_correction(
+            daily_employee.id,
+            date(2026, 5, 1),
+            "absent",
+            corrected_by=1,
+            reason="Daily employee missed a normal work day",
+            options={},
+            db=self.db,
+        )
+
+        self.assertEqual(correction.new_values_json["status"], "absent")
+        self.assertEqual(day.status, "absent")
+        self.assertEqual(day.expected_work_minutes, 480)
+        self.assertEqual(day.unpaid_minutes, 480)
+
+    def test_hourly_employee_schedule_weekly_off_can_be_corrected_to_absent(self):
+        hourly_employee = self._create_employee_with_salary_type(2, "Hourly")
+
+        correction, day = apply_smart_attendance_status_correction(
+            hourly_employee.id,
+            date(2026, 5, 1),
+            "absent",
+            corrected_by=1,
+            reason="Hourly employee missed a normal work day",
+            options={},
+            db=self.db,
+        )
+
+        self.assertEqual(correction.new_values_json["status"], "absent")
+        self.assertEqual(day.status, "absent")
+        self.assertEqual(day.expected_work_minutes, 480)
+        self.assertEqual(day.unpaid_minutes, 480)
 
     def test_current_period_calendar_days_mode_accrues_through_cutoff_date(self):
         period = self._payroll_period_for_month(2026, 5)

@@ -11,6 +11,7 @@ from app.models.types.vacationTypes import VacationTypes
 from app.models.vacation import Vacation
 from app.services.notification_service import NotificationService
 from app.services.policy_service import (
+    SALARY_TYPE_MAP,
     WEEKDAY_NAMES,
     get_employee_schedule,
     get_local_day_bounds,
@@ -305,6 +306,14 @@ def _is_weekly_off_date(schedule, work_date: date) -> bool:
     return WEEKDAY_NAMES[work_date.weekday()] in weekly_off_days
 
 
+def _employee_receives_weekly_off(employee: Employees) -> bool:
+    return SALARY_TYPE_MAP.get(employee.salary_type, "monthly") == "monthly"
+
+
+def _is_weekly_off_for_employee(employee: Employees, schedule, work_date: date) -> bool:
+    return _employee_receives_weekly_off(employee) and _is_weekly_off_date(schedule, work_date)
+
+
 def _materialize_weekly_off_rows(
     employee_ids: list[int],
     start_date: date,
@@ -322,17 +331,30 @@ def _materialize_weekly_off_rows(
         )
     ).all()
     existing_keys = {(day.employee_id, day.work_date) for day in existing_days}
+    employees = db.scalars(
+        select(Employees).where(
+            Employees.id.in_(employee_ids),
+            Employees.is_active.is_(True),
+        )
+    ).all()
+    weekly_off_employees = {
+        employee.id: employee
+        for employee in employees
+        if _employee_receives_weekly_off(employee)
+    }
+    if not weekly_off_employees:
+        return 0
 
     created = 0
     current = start_date
     while current <= end_date:
-        for employee_id in employee_ids:
+        for employee_id, employee in weekly_off_employees.items():
             key = (employee_id, current)
             if key in existing_keys:
                 continue
 
             schedule = get_employee_schedule(employee_id, current, db)
-            if not _is_weekly_off_date(schedule, current):
+            if not _is_weekly_off_for_employee(employee, schedule, current):
                 continue
 
             reviewed_at = _utc_now()
@@ -457,7 +479,7 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
             raise BadRequestException("check_out cannot be before check_in", message_key="errors.check_out_before_check_in")
 
     warning = None
-    if WEEKDAY_NAMES[work_date.weekday()] in {day.lower() for day in (schedule.weekly_off_days or [])}:
+    if _is_weekly_off_for_employee(employee, schedule, work_date):
         warning = "Attendance created on a weekly off day"
 
     return {"warning": warning, "employee": employee, "work_date": work_date, "schedule": schedule}
@@ -701,7 +723,7 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
     day.unpaid_minutes = 0
     day.status = "absent"
 
-    weekly_off = WEEKDAY_NAMES[work_date.weekday()] in {item.lower() for item in (schedule.weekly_off_days or [])}
+    weekly_off = _is_weekly_off_for_employee(employee, schedule, work_date)
     has_attendance_time = bool(day.check_in_time or day.break_start_time or day.break_end_time or day.check_out_time)
     if not has_attendance_time and weekly_off:
         day.status = "weekly_off"
@@ -975,10 +997,11 @@ def _smart_status_time_values(
 
 
 def _smart_status_values(employee_id: int, work_date: date, target_status: str, options: dict, db: Session) -> dict[str, str | None]:
+    employee = _get_employee(employee_id, db)
     schedule = get_employee_schedule(employee_id, work_date, db)
     policy = get_or_create_payroll_policy(db)
     target_status = target_status.strip().lower()
-    is_weekly_off_day = _is_weekly_off_date(schedule, work_date)
+    is_weekly_off_day = _is_weekly_off_for_employee(employee, schedule, work_date)
 
     if target_status == "present":
         return {
