@@ -77,6 +77,19 @@ def _legacy_attendance_defaults(db: Session) -> dict[str, Decimal | int]:
     }
 
 
+def _normalize_employee_compensation_prices(employee: Employees) -> None:
+    salary_type = SALARY_TYPE_MAP.get(employee.salary_type, "monthly")
+    if salary_type == "monthly":
+        employee.day_price = Decimal("0.00")
+        employee.hour_price = Decimal("0.00")
+    elif salary_type == "daily":
+        employee.monthly_price = Decimal("0.00")
+        employee.hour_price = Decimal("0.00")
+    elif salary_type == "hourly":
+        employee.monthly_price = Decimal("0.00")
+        employee.day_price = Decimal("0.00")
+
+
 def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | EmployeeUpdateRequest, db: Session) -> None:
     data = payload.model_dump(exclude_unset=True, by_alias=False)
 
@@ -138,6 +151,8 @@ def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | 
     for field_name in numeric_fields:
         if field_name in data and data[field_name] is not None:
             setattr(employee, field_name, data[field_name])
+
+    _normalize_employee_compensation_prices(employee)
 
 
 def _sync_employee_auto_attendance(
