@@ -113,6 +113,46 @@ def resolve_auto_attendance_effective_from(employee_id: int, db: Session, now: d
         candidate += timedelta(days=1)
 
 
+def reconcile_auto_attendance_after_schedule_change(db: Session, now: datetime | None = None) -> int:
+    schedule = get_default_work_schedule(db)
+    local_now = _local_now(schedule, now)
+    work_date = local_now.date()
+    if _has_auto_attendance_start_arrived(local_now, schedule):
+        return 0
+
+    employees = db.scalars(
+        select(Employees)
+        .where(
+            Employees.deleted_at.is_(None),
+            Employees.is_active.is_(True),
+            Employees.auto_attendance_enabled.is_(True),
+            Employees.auto_attendance_effective_from.is_not(None),
+            Employees.auto_attendance_effective_from > work_date,
+        )
+        .order_by(Employees.id.asc())
+    ).all()
+
+    updated = 0
+    for employee in employees:
+        holidays = set(get_employee_holiday_dates(employee.id, work_date, work_date, db))
+        if not _is_schedule_workday(work_date, schedule, holidays):
+            continue
+        if _has_approved_vacation(employee.id, work_date, db):
+            continue
+        if _get_existing_day(employee.id, work_date, db):
+            continue
+        if _has_existing_events(employee.id, work_date, schedule, db):
+            continue
+
+        employee.auto_attendance_effective_from = work_date
+        db.add(employee)
+        updated += 1
+
+    if updated:
+        db.flush()
+    return updated
+
+
 def _latest_auto_attendance_work_date(schedule, now: datetime | None = None) -> date:
     local_now = _local_now(schedule, now)
     if _has_auto_attendance_start_arrived(local_now, schedule):

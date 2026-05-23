@@ -101,8 +101,10 @@ def put_work_schedule(
     previous_values = {field: getattr(current_schedule, field) for field in impactful_fields}
     schedule = update_default_work_schedule(db, **payload.model_dump())
     if any(previous_values[field] != getattr(schedule, field) for field in impactful_fields):
+        from app.services.auto_attendance_service import reconcile_auto_attendance_after_schedule_change
         from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_settings_change
 
+        reconcile_auto_attendance_after_schedule_change(db)
         reconcile_existing_payrolls_for_settings_change(
             db,
             reason="work_schedule_updated",
@@ -137,8 +139,10 @@ def put_work_schedule_by_id(
         any(previous_values[field] != getattr(schedule, field) for field in impactful_fields)
         and (bool(previous_values["is_default"]) or bool(schedule.is_default))
     ):
+        from app.services.auto_attendance_service import reconcile_auto_attendance_after_schedule_change
         from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_settings_change
 
+        reconcile_auto_attendance_after_schedule_change(db)
         reconcile_existing_payrolls_for_settings_change(
             db,
             reason="work_schedule_updated",

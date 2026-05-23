@@ -91,6 +91,10 @@ def _datetime_for_work_time(work_date: date, work_time: time, schedule_timezone:
     return datetime.combine(work_date, work_time, tzinfo=schedule_timezone).astimezone(timezone.utc)
 
 
+def _event_time_for_schedule(event_time: datetime, schedule_timezone: tzinfo) -> time:
+    return _normalize_event_time(event_time).astimezone(schedule_timezone).time().replace(tzinfo=None)
+
+
 def _scheduled_break_window(work_date: date, schedule) -> tuple[time | None, time | None]:
     if getattr(schedule, "break_start_time", None) and getattr(schedule, "break_end_time", None):
         return schedule.break_start_time, schedule.break_end_time
@@ -676,10 +680,10 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
         elif event.event_type == "check_out":
             event_times["check_out"] = event.event_time
 
-    day.check_in_time = event_times.get("check_in").time() if event_times.get("check_in") else None
-    day.break_start_time = event_times.get("break_start").time() if event_times.get("break_start") else None
-    day.break_end_time = event_times.get("break_end").time() if event_times.get("break_end") else None
-    day.check_out_time = event_times.get("check_out").time() if event_times.get("check_out") else None
+    day.check_in_time = _event_time_for_schedule(event_times["check_in"], schedule_timezone) if event_times.get("check_in") else None
+    day.break_start_time = _event_time_for_schedule(event_times["break_start"], schedule_timezone) if event_times.get("break_start") else None
+    day.break_end_time = _event_time_for_schedule(event_times["break_end"], schedule_timezone) if event_times.get("break_end") else None
+    day.check_out_time = _event_time_for_schedule(event_times["check_out"], schedule_timezone) if event_times.get("check_out") else None
     corrected_fields = _apply_corrections(day, db)
     manual_status = day.status if "status" in corrected_fields else None
 
