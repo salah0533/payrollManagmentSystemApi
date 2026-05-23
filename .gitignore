@@ -3,6 +3,7 @@ venv
 *.pyc
 *.db
 alembic.ini
+build
 alembic/*
 !alembic/versions/
 alembic/env.py
