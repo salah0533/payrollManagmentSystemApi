@@ -9,10 +9,11 @@ from app.models.attendance_payroll import (
     DEFAULT_MONTHLY_PAYROLL_CALCULATION_MODE,
     MONTHLY_PAYROLL_CALCULATION_MODES,
 )
-from app.utility.reference_codes import ATTENDANCE_EVENT_TYPE_CODES, PAYROLL_ADJUSTMENT_TYPE_CODES
+from app.utility.reference_codes import ATTENDANCE_EVENT_TYPE_CODES
 
 ATTENDANCE_EVENT_TYPES = set(ATTENDANCE_EVENT_TYPE_CODES)
-PAYROLL_FINAL_STATUSES = {"approved", "paid", "locked"}
+PAYROLL_FINAL_STATUSES = {"locked"}
+LEDGER_TRANSACTION_TYPES = {"payment", "bonus", "deduction"}
 
 
 class AttendanceEventCreate(BaseModel):
@@ -323,94 +324,84 @@ class PayrollPolicyRead(PayrollPolicyPayload):
     model_config = {"from_attributes": True}
 
 
-class PayrollAdjustmentCreate(BaseModel):
-    employee_payroll_id: int
-    payroll_period_id: int
+class LedgerTransactionCreate(BaseModel):
     employee_id: int
-    adjustment_type: str
+    type: str
+    transaction_date: datetime
     amount: Decimal
-    reason: str = ""
+    description: Optional[str] = None
     created_by: Optional[int] = None
 
-    @field_validator("adjustment_type")
+    @field_validator("type")
     @classmethod
-    def validate_adjustment_type(cls, value: str) -> str:
-        valid = set(PAYROLL_ADJUSTMENT_TYPE_CODES)
-        if value not in valid:
-            raise ValueError(f"adjustment_type must be one of {sorted(valid)}")
+    def validate_type(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in LEDGER_TRANSACTION_TYPES:
+            raise ValueError(f"type must be one of {sorted(LEDGER_TRANSACTION_TYPES)}")
         return value
 
     @field_validator("amount")
     @classmethod
     def validate_amount(cls, value: Decimal) -> Decimal:
-        if value <= 0:
-            raise ValueError("amount must be greater than zero")
+        if value == 0:
+            raise ValueError("amount cannot be zero")
         return value
 
-    @field_validator("reason")
+    @field_validator("description")
     @classmethod
-    def validate_reason(cls, value: str) -> str:
-        return (value or "").strip()
+    def normalize_description(cls, value: Optional[str]) -> Optional[str]:
+        return (value or "").strip() or None
 
 
-class PayrollAdjustmentUpdate(BaseModel):
-    adjustment_type: Optional[str] = None
+class LedgerTransactionUpdate(BaseModel):
+    type: Optional[str] = None
+    transaction_date: Optional[datetime] = None
     amount: Optional[Decimal] = None
-    reason: Optional[str] = None
+    description: Optional[str] = None
 
-    @field_validator("adjustment_type")
+    @field_validator("type")
     @classmethod
-    def validate_adjustment_type(cls, value: Optional[str]) -> Optional[str]:
+    def validate_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
-        valid = set(PAYROLL_ADJUSTMENT_TYPE_CODES)
-        if value not in valid:
-            raise ValueError(f"adjustment_type must be one of {sorted(valid)}")
-        return value
+        normalized = value.strip().lower()
+        if normalized not in LEDGER_TRANSACTION_TYPES:
+            raise ValueError(f"type must be one of {sorted(LEDGER_TRANSACTION_TYPES)}")
+        return normalized
 
     @field_validator("amount")
     @classmethod
     def validate_amount(cls, value: Optional[Decimal]) -> Optional[Decimal]:
-        if value is not None and value <= 0:
-            raise ValueError("amount must be greater than zero")
+        if value is not None and value == 0:
+            raise ValueError("amount cannot be zero")
         return value
 
-    @field_validator("reason")
+    @field_validator("description")
     @classmethod
-    def validate_reason(cls, value: Optional[str]) -> Optional[str]:
+    def validate_description(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
-        return value.strip()
+        return value.strip() or None
 
 
-class PayrollAdjustmentRead(BaseModel):
+class LedgerTransactionRead(BaseModel):
     id: int
-    employee_payroll_id: int
-    payroll_period_id: int
     employee_id: int
-    adjustment_type: str
+    type: str
+    transaction_date: datetime
     amount: Decimal
-    reason: str
+    description: Optional[str]
+    status: Optional[str]
     created_by: Optional[int]
+    updated_by: Optional[int]
     created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-class PayrollPaymentRequest(BaseModel):
-    amount: Optional[Decimal] = None
-    note: Optional[str] = None
-
-
-class PayrollReopenRequest(BaseModel):
-    reason: str
-
-    @field_validator("reason")
-    @classmethod
-    def validate_reason(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("reason is required")
-        return value.strip()
+class PeriodLockRequest(BaseModel):
+    reason: Optional[str] = None
 
 
 class PayrollDiscrepancyResolveRequest(BaseModel):
@@ -426,30 +417,14 @@ class EmployeePayrollRead(BaseModel):
     base_salary: Decimal
     normal_amount: Decimal
     overtime_amount: Decimal
-    bonus_amount: Decimal
-    deduction_amount: Decimal
-    late_deduction_amount: Decimal
+    attendance_deduction_amount: Decimal
     unpaid_vacation_deduction: Decimal
-    adjustment_amount: Decimal
     gross_salary: Decimal
     net_salary: Decimal
     total_amount: Decimal
-    paid_amount: Decimal
-    balance_amount: Decimal
     status: str
     calculated_at: datetime
-    reviewed_at: Optional[datetime]
-    approved_at: Optional[datetime]
-    paid_at: Optional[datetime]
     notes: Optional[str]
-    attendance_deduction_amount: Decimal = Decimal("0.00")
-    manual_deduction_amount: Decimal = Decimal("0.00")
-    late_penalty_amount: Decimal = Decimal("0.00")
-    due_settlement_amount: Decimal = Decimal("0.00")
-    employee_due_balance: Decimal = Decimal("0.00")
-    settled_due_amount: Decimal = Decimal("0.00")
-    remaining_due_settlement_amount: Decimal = Decimal("0.00")
-    remaining_due_balance_after_settlement: Decimal = Decimal("0.00")
     calculation_data_json: dict[str, Any] = Field(default_factory=dict)
     needs_review_reason: Optional[str] = None
 
@@ -460,16 +435,13 @@ class PayrollEmployeeBalanceRead(BaseModel):
     employee_id: int
     employee_name: str
     total_amount: Decimal
-    paid_amount: Decimal
-    balance_amount: Decimal
     payroll_count: int
+    ledger_balance: Decimal
 
 
 class PayrollBalanceReportRead(BaseModel):
     period_id: Optional[int] = None
     total_amount: Decimal
-    paid_amount: Decimal
-    balance_amount: Decimal
     company_owes_employees: Decimal
     employees_owe_company: Decimal
     employees: list[PayrollEmployeeBalanceRead]
@@ -478,8 +450,7 @@ class PayrollBalanceReportRead(BaseModel):
 class PayrollEmployeeHistorySummaryRead(BaseModel):
     net_salary_total: Decimal
     payable_total: Decimal
-    paid_amount_total: Decimal
-    remaining_amount_total: Decimal
+    ledger_total: Decimal
     payroll_count: int
 
 
@@ -508,11 +479,8 @@ class PayrollPeriodRead(BaseModel):
     end_date: date
     status: str
     generated_at: datetime
-    reviewed_at: Optional[datetime]
-    approved_at: Optional[datetime]
-    approved_by: Optional[int]
-    paid_at: Optional[datetime]
     locked_at: Optional[datetime]
+    locked_by: Optional[int]
     payrolls: list[EmployeePayrollRead] = []
 
     model_config = {"from_attributes": True}
@@ -525,11 +493,8 @@ class PayrollPeriodSummaryRead(BaseModel):
     end_date: date
     status: str
     generated_at: datetime
-    reviewed_at: Optional[datetime]
-    approved_at: Optional[datetime]
-    approved_by: Optional[int]
-    paid_at: Optional[datetime]
     locked_at: Optional[datetime]
+    locked_by: Optional[int]
 
     model_config = {"from_attributes": True}
 
@@ -566,6 +531,39 @@ class PayrollHistoryRead(BaseModel):
     created_by: Optional[int]
 
     model_config = {"from_attributes": True}
+
+
+class EmployeeFinancialTotalRead(BaseModel):
+    employee_id: int
+    total_balance: Decimal
+    recalculated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EmployeeLedgerRowRead(BaseModel):
+    id: str
+    source_id: int
+    employee_id: int
+    type: str
+    date: datetime
+    status: Optional[str] = None
+    description: Optional[str] = None
+    balance: Decimal
+    running_total: Decimal
+    period_id: Optional[int] = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class EmployeeLedgerRead(BaseModel):
+    employee_id: int
+    employee_name: str
+    total: EmployeeFinancialTotalRead
+    page: int
+    page_size: int
+    total_records: int
+    total_pages: int
+    items: list[EmployeeLedgerRowRead] = []
 
 
 class AuditLogRead(BaseModel):

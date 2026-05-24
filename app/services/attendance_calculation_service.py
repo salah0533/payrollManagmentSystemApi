@@ -1,6 +1,6 @@
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.exceptions.base_exception import BadRequestException, ForbiddenException, ResourceNotFoundException
@@ -132,6 +132,44 @@ def _get_employee(employee_id: int, db: Session) -> Employees:
     if not employee.is_active:
         raise BadRequestException("Inactive employees cannot create attendance", message_key="errors.inactive_employee_attendance")
     return employee
+
+
+def _employee_join_date(employee: Employees) -> date:
+    return employee.hire_date or employee.joined or date.min
+
+
+def _employee_join_expression():
+    return func.coalesce(Employees.hire_date, Employees.joined)
+
+
+def _assert_employee_joined_for_date(employee: Employees, work_date: date) -> None:
+    joined_on = _employee_join_date(employee)
+    if work_date < joined_on:
+        raise BadRequestException(
+            f"Attendance cannot be created before employee join date {joined_on.isoformat()}",
+            message_key="errors.attendance_before_join_date",
+        )
+
+
+def _assert_employee_joined_for_range(employee: Employees, start_date: date, end_date: date) -> None:
+    joined_on = _employee_join_date(employee)
+    if start_date < joined_on:
+        raise BadRequestException(
+            f"Attendance range cannot start before employee join date {joined_on.isoformat()}",
+            message_key="errors.attendance_before_join_date",
+        )
+
+
+def _assert_attendance_period_open(work_date: date, db: Session) -> None:
+    from app.services.payroll_calculation_service import assert_period_open_for_date
+
+    assert_period_open_for_date(work_date, db)
+
+
+def _assert_attendance_range_open(start_date: date, end_date: date, db: Session) -> None:
+    from app.services.payroll_calculation_service import assert_periods_open_for_range
+
+    assert_periods_open_for_range(start_date, end_date, db)
 
 
 def _resolve_work_date(employee_id: int, event_time: datetime, db: Session) -> tuple[date, object]:
@@ -350,6 +388,8 @@ def _materialize_weekly_off_rows(
     while current <= end_date:
         for employee_id, employee in weekly_off_employees.items():
             key = (employee_id, current)
+            if current < _employee_join_date(employee):
+                continue
             if key in existing_keys:
                 continue
 
@@ -405,6 +445,8 @@ def _materialize_weekly_off_rows_for_active_employees(start_date: date, end_date
 
 
 def _get_or_create_attendance_day(employee_id: int, work_date: date, db: Session) -> AttendanceDay:
+    employee = _get_employee(employee_id, db)
+    _assert_employee_joined_for_date(employee, work_date)
     day = db.scalar(
         select(AttendanceDay).where(
             AttendanceDay.employee_id == employee_id,
@@ -431,6 +473,7 @@ def validate_attendance_event(employee_id: int, event_type: str, event_time: dat
     event_time = _normalize_event_time(event_time)
     employee = _get_employee(employee_id, db)
     work_date, schedule = _resolve_work_date(employee_id, event_time, db)
+    _assert_employee_joined_for_date(employee, work_date)
     vacation = _get_vacation(employee_id, work_date, db)
 
     if vacation:
@@ -499,6 +542,7 @@ def create_attendance_event(
         raise BadRequestException("Invalid attendance event type", message_key="errors.invalid_attendance_event_type")
 
     validation = validate_attendance_event(employee_id, event_type, event_time, db)
+    _assert_attendance_period_open(validation["work_date"], db)
     event = AttendanceEvent(
         employee_id=employee_id,
         event_type=event_type,
@@ -670,11 +714,12 @@ def _resolve_review_status(
 
 
 def calculate_attendance_day(employee_id: int, work_date: date, db: Session, trigger_reason: str = "recalculation") -> AttendanceDay:
+    employee = _get_employee(employee_id, db)
+    _assert_employee_joined_for_date(employee, work_date)
     schedule = get_employee_schedule(employee_id, work_date, db)
     policy = get_or_create_payroll_policy(db)
     vacation = _get_vacation(employee_id, work_date, db)
     day = _get_or_create_attendance_day(employee_id, work_date, db)
-    employee = _get_employee(employee_id, db)
     previous_status = day.status
     previous_review_status = day.review_status
     day.work_schedule_id = schedule.id
@@ -851,9 +896,11 @@ def calculate_attendance_day(employee_id: int, work_date: date, db: Session, tri
 
 
 def recalculate_attendance_for_employee(employee_id: int, start_date: date, end_date: date, db: Session) -> list[AttendanceDay]:
-    _get_employee(employee_id, db)
+    employee = _get_employee(employee_id, db)
     if start_date > end_date:
         raise BadRequestException("start_date must be before end_date", message_key="errors.start_before_end")
+    _assert_employee_joined_for_range(employee, start_date, end_date)
+    _assert_attendance_range_open(start_date, end_date, db)
 
     current = start_date
     days: list[AttendanceDay] = []
@@ -868,17 +915,21 @@ def recalculate_attendance_for_employee(employee_id: int, start_date: date, end_
 
 
 def mark_all_employees_present(work_date: date, db: Session, created_by: int | None = None) -> dict[str, int]:
-    employee_ids = db.scalars(
-        select(Employees.id).where(Employees.is_active.is_(True)).order_by(Employees.id.asc())
+    _assert_attendance_period_open(work_date, db)
+    employees = db.scalars(
+        select(Employees).where(Employees.is_active.is_(True)).order_by(Employees.id.asc())
     ).all()
 
-    if not employee_ids:
+    if not employees:
         return {"updated": 0, "created": 0}
 
     created = 0
     updated = 0
 
-    for employee_id in employee_ids:
+    for employee in employees:
+        if work_date < _employee_join_date(employee):
+            continue
+        employee_id = employee.id
         existing_day = db.scalar(
             select(AttendanceDay).where(
                 AttendanceDay.employee_id == employee_id,
@@ -1088,6 +1139,9 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
 
 
 def apply_smart_attendance_status_correction(employee_id: int, work_date: date, target_status: str, corrected_by: int | None, reason: str, options: dict | None, db: Session):
+    employee = _get_employee(employee_id, db)
+    _assert_employee_joined_for_date(employee, work_date)
+    _assert_attendance_period_open(work_date, db)
     day = _get_or_create_attendance_day(employee_id, work_date, db)
     old_snapshot = _serialize_day_values(day)
     merged_options = {"source": "hr_correction", **(options or {})}
@@ -1143,6 +1197,9 @@ def _is_holiday_vacation(vacation: Vacation, db: Session) -> bool:
 
 
 def create_attendance_correction(payload, db: Session):
+    employee = _get_employee(payload.employee_id, db)
+    _assert_employee_joined_for_date(employee, payload.work_date)
+    _assert_attendance_period_open(payload.work_date, db)
     if payload.correction_type == "smart_status" or payload.field_changed == "status":
         return apply_smart_attendance_status_correction(
             payload.employee_id,
@@ -1238,6 +1295,9 @@ def _validate_attendance_correction(day: AttendanceDay, payload) -> None:
 
 
 def delete_attendance_day(employee_id: int, work_date: date, db: Session, deleted_by: int | None = None) -> dict[str, int]:
+    employee = _get_employee(employee_id, db)
+    _assert_employee_joined_for_date(employee, work_date)
+    _assert_attendance_period_open(work_date, db)
     day = db.scalar(
         select(AttendanceDay).where(
             AttendanceDay.employee_id == employee_id,
@@ -1281,6 +1341,9 @@ def delete_attendance_day(employee_id: int, work_date: date, db: Session, delete
 
 
 def review_attendance_day(employee_id: int, work_date: date, review_status: str, reviewed_by: int | None, note: str | None, db: Session) -> AttendanceDay:
+    employee = _get_employee(employee_id, db)
+    _assert_employee_joined_for_date(employee, work_date)
+    _assert_attendance_period_open(work_date, db)
     day = _get_or_create_attendance_day(employee_id, work_date, db)
     previous_review_status = day.review_status
     day.review_status = review_status
@@ -1309,10 +1372,12 @@ def get_attendance_day(employee_id: int, work_date: date, db: Session) -> Attend
     _materialize_weekly_off_rows_for_employee(employee_id, work_date, work_date, db)
     return db.scalar(
         select(AttendanceDay)
+        .join(Employees, AttendanceDay.employee_id == Employees.id)
         .options(selectinload(AttendanceDay.events))
         .where(
             AttendanceDay.employee_id == employee_id,
             AttendanceDay.work_date == work_date,
+            AttendanceDay.work_date >= _employee_join_expression(),
         )
     )
 
@@ -1321,11 +1386,13 @@ def get_attendance_days(employee_id: int, start_date: date, end_date: date, db: 
     _materialize_weekly_off_rows_for_employee(employee_id, start_date, end_date, db)
     return db.scalars(
         select(AttendanceDay)
+        .join(Employees, AttendanceDay.employee_id == Employees.id)
         .options(selectinload(AttendanceDay.events))
         .where(
             AttendanceDay.employee_id == employee_id,
             AttendanceDay.work_date >= start_date,
             AttendanceDay.work_date <= end_date,
+            AttendanceDay.work_date >= _employee_join_expression(),
         )
         .order_by(AttendanceDay.work_date.asc())
     ).all()
@@ -1340,6 +1407,7 @@ def get_attendance_days_by_date(work_date: date, db: Session) -> list[Attendance
         .where(
             Employees.deleted_at.is_(None),
             AttendanceDay.work_date == work_date,
+            AttendanceDay.work_date >= _employee_join_expression(),
         )
         .order_by(AttendanceDay.employee_id.asc())
     ).all()
@@ -1355,6 +1423,7 @@ def get_attendance_days_in_range(start_date: date, end_date: date, db: Session) 
             Employees.deleted_at.is_(None),
             AttendanceDay.work_date >= start_date,
             AttendanceDay.work_date <= end_date,
+            AttendanceDay.work_date >= _employee_join_expression(),
         )
         .order_by(AttendanceDay.work_date.asc(), AttendanceDay.employee_id.asc())
     ).all()

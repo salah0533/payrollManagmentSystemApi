@@ -12,6 +12,7 @@ class Vacation(Base):
     vacation_type = Column(Integer,ForeignKey("vacation_types.id"), nullable=False)
     vacation_status = Column(Integer,ForeignKey("vacation_status.id"),nullable=False)
     is_paid = Column(Boolean,nullable=False)
+    reason = Column(String, nullable=True)
 
     vacation_types_tab = relationship("VacationTypes",back_populates="vacation_tab")
     vacation_status_tab = relationship("VacationStatus",back_populates="vacation_tab")

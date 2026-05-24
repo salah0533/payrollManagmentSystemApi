@@ -39,10 +39,8 @@ PERMISSION_DEFINITIONS = (
     {"code": "payroll.read_all", "name": "Read all payroll", "description": "View payroll for all employees", "module": "payroll"},
     {"code": "payroll.read_own", "name": "Read own payroll", "description": "View the current user's payroll", "module": "payroll"},
     {"code": "payroll.calculate", "name": "Calculate payroll", "description": "Calculate or recalculate payroll", "module": "payroll"},
-    {"code": "payroll.adjust", "name": "Adjust payroll", "description": "Create payroll adjustments and resolve discrepancies", "module": "payroll"},
-    {"code": "payroll.approve", "name": "Approve payroll", "description": "Approve payroll records", "module": "payroll"},
-    {"code": "payroll.mark_paid", "name": "Mark payroll paid", "description": "Mark payroll records as paid", "module": "payroll"},
-    {"code": "payroll.lock", "name": "Lock payroll", "description": "Lock finalized payroll records", "module": "payroll"},
+    {"code": "payroll.adjust", "name": "Manage payroll ledger", "description": "Create ledger transactions and resolve discrepancies", "module": "payroll"},
+    {"code": "payroll.lock", "name": "Lock payroll period", "description": "Lock or unlock payroll periods and their attendance days", "module": "payroll"},
     {"code": "vacations.read_all", "name": "Read all vacations", "description": "View vacation requests for all employees", "module": "vacations"},
     {"code": "vacations.read_own", "name": "Read own vacations", "description": "View the current user's vacations", "module": "vacations"},
     {"code": "vacations.request_own", "name": "Request own vacations", "description": "Create self-service vacation requests", "module": "vacations"},
@@ -87,7 +85,7 @@ DEFAULT_ROLE_PERMISSIONS = {
 }
 
 SALARY_TYPE_CODES = ("monthly", "daily", "hourly")
-PAYMENT_TYPE_CODES = ("payment", "bonus", "deduction", "attendance")
+PAYMENT_TYPE_CODES = ("payment", "bonus", "deduction")
 
 ATTENDANCE_EVENT_TYPE_CODES = ("check_in", "break_start", "break_end", "check_out", "manual_event")
 ATTENDANCE_STATUS_CODES = (
@@ -104,9 +102,8 @@ ATTENDANCE_STATUS_CODES = (
     "manually_corrected",
 )
 
-PAYROLL_PERIOD_STATUS_CODES = ("draft", "reviewed", "approved", "paid", "locked", "cancelled")
-EMPLOYEE_PAYROLL_STATUS_CODES = ("draft", "needs_review", "approved", "partially_paid", "paid", "locked")
-PAYROLL_ADJUSTMENT_TYPE_CODES = ("bonus", "deduction", "correction", "due_settlement")
+PAYROLL_PERIOD_STATUS_CODES = ("open", "locked")
+EMPLOYEE_PAYROLL_STATUS_CODES = ("draft", "needs_review")
 PAYROLL_DISCREPANCY_TYPE_CODES = (
     "missing_checkout",
     "missing_checkin",

@@ -5,7 +5,7 @@ from typing import Optional
 class PaymentBaseModel(BaseModel):
     employee_id :int
     date:d
-    payment_type:int
+    payment_type:str
     amount:float
     description:str
     year_month:Optional[str]=None
@@ -24,7 +24,7 @@ class UpdatePaymentBaseModel(BaseModel):
     id:int
     employee_id :int
     date:Optional[d]
-    payment_type:Optional[int]
+    payment_type:Optional[str]
     amount:Optional[float]
     description:Optional[str]
 

@@ -188,13 +188,10 @@ class PayrollPeriod(Base):
     name = Column(String(100), nullable=False)
     start_date = Column(Date, nullable=False, index=True)
     end_date = Column(Date, nullable=False, index=True)
-    status = Column(String(20), nullable=False, default="draft")
+    status = Column(String(20), nullable=False, default="open")
     generated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
-    reviewed_at = Column(DateTime(timezone=True), nullable=True)
-    approved_at = Column(DateTime(timezone=True), nullable=True)
-    approved_by = Column(Integer, nullable=True)
-    paid_at = Column(DateTime(timezone=True), nullable=True)
     locked_at = Column(DateTime(timezone=True), nullable=True)
+    locked_by = Column(Integer, nullable=True)
 
     payrolls = relationship("EmployeePayroll", back_populates="payroll_period")
 
@@ -213,45 +210,49 @@ class EmployeePayroll(Base):
     base_salary = Column(Numeric(12, 2), nullable=False, default=0)
     normal_amount = Column(Numeric(12, 2), nullable=False, default=0)
     overtime_amount = Column(Numeric(12, 2), nullable=False, default=0)
-    bonus_amount = Column(Numeric(12, 2), nullable=False, default=0)
-    deduction_amount = Column(Numeric(12, 2), nullable=False, default=0)
-    late_deduction_amount = Column(Numeric(12, 2), nullable=False, default=0)
+    attendance_deduction_amount = Column(Numeric(12, 2), nullable=False, default=0)
     unpaid_vacation_deduction = Column(Numeric(12, 2), nullable=False, default=0)
-    adjustment_amount = Column(Numeric(12, 2), nullable=False, default=0)
     gross_salary = Column(Numeric(12, 2), nullable=False, default=0)
     net_salary = Column(Numeric(12, 2), nullable=False, default=0)
     total_amount = Column(Numeric(12, 2), nullable=False, default=0)
-    paid_amount = Column(Numeric(12, 2), nullable=False, default=0)
-    balance_amount = Column(Numeric(12, 2), nullable=False, default=0)
     status = Column(String(20), nullable=False, default="draft")
     calculated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
-    reviewed_at = Column(DateTime(timezone=True), nullable=True)
-    approved_at = Column(DateTime(timezone=True), nullable=True)
-    paid_at = Column(DateTime(timezone=True), nullable=True)
     notes = Column(Text, nullable=True)
 
     payroll_period = relationship("PayrollPeriod", back_populates="payrolls")
     employee = relationship("Employees")
-    adjustments = relationship("PayrollAdjustment", back_populates="employee_payroll")
     discrepancies = relationship("PayrollDiscrepancy", back_populates="employee_payroll")
     history = relationship("PayrollCalculationHistory", back_populates="employee_payroll")
 
 
-class PayrollAdjustment(Base):
-    __tablename__ = "payroll_adjustment"
+class EmployeeLedgerTransaction(Base):
+    __tablename__ = "employee_ledger_transaction"
+    __table_args__ = (
+        Index("ix_employee_ledger_employee_date", "employee_id", "transaction_date"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    employee_payroll_id = Column(Integer, ForeignKey("employee_payroll.id", ondelete="CASCADE"), nullable=False, index=True)
-    payroll_period_id = Column(Integer, ForeignKey("payroll_period.id", ondelete="CASCADE"), nullable=False, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
-    adjustment_type = Column(String(20), nullable=False)
+    type = Column(String(20), nullable=False, index=True)
+    transaction_date = Column(DateTime(timezone=True), nullable=False, index=True)
     amount = Column(Numeric(12, 2), nullable=False)
-    reason = Column(Text, nullable=False)
-    created_by = Column(Integer, nullable=True)
+    description = Column(Text, nullable=True)
+    status = Column(String(20), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    created_by = Column(Integer, nullable=True)
+    updated_by = Column(Integer, nullable=True)
 
-    employee_payroll = relationship("EmployeePayroll", back_populates="adjustments")
-    payroll_period = relationship("PayrollPeriod")
+    employee = relationship("Employees")
+
+
+class EmployeeFinancialTotal(Base):
+    __tablename__ = "employee_financial_total"
+
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), primary_key=True)
+    total_balance = Column(Numeric(12, 2), nullable=False, default=0)
+    recalculated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
     employee = relationship("Employees")
 
 

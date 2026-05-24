@@ -1,91 +1,101 @@
-from datetime import date
+from datetime import date, datetime, time, timezone
 
-from sqlalchemy import desc, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.exceptions.base_exception import BadRequestException
-from app.exceptions.db_exceptions.employeeNotFound import EmployeeNotFound
+from app.exceptions.base_exception import ResourceNotFoundException
+from app.models.attendance_payroll import EmployeeLedgerTransaction
 from app.models.employees import Employees
-from app.models.payments import Payments
-from app.services.payroll_calculation_service import get_employee_payroll_by_period, get_or_create_payroll_period_for_date
+from app.services.payroll_calculation_service import get_employee_ledger, recalculate_employee_financial_total
 
 
-def _legacy_payment_write_disabled() -> None:
-    raise BadRequestException(
-        "Legacy payment writes are disabled. Use /payroll/mark-paid for payments and /payroll/adjustment for bonuses, deductions, or due settlements."
-    )
+def _day_start(value: date) -> datetime:
+    return datetime.combine(value, time.min, tzinfo=timezone.utc)
+
+
+def _day_end(value: date) -> datetime:
+    return datetime.combine(value, time.max, tzinfo=timezone.utc)
 
 
 def get_emp_att_payment(emp_id, start: date, end: date, db: Session):
-    employee = db.get(Employees, emp_id)
-    if not employee:
-        raise EmployeeNotFound("employee not found")
-    period = get_or_create_payroll_period_for_date(end, db)
-    payroll = get_employee_payroll_by_period(emp_id, period.id, db)
-    return {
-        "employee_id": emp_id,
-        "period_id": period.id,
-        "period_start": period.start_date,
-        "period_end": period.end_date,
-        "salary_type": payroll.salary_type,
-        "base_salary": payroll.base_salary,
-        "normal_amount": payroll.normal_amount,
-        "overtime_amount": payroll.overtime_amount,
-        "bonus_amount": payroll.bonus_amount,
-        "deduction_amount": payroll.deduction_amount,
-        "late_deduction_amount": payroll.late_deduction_amount,
-        "unpaid_vacation_deduction": payroll.unpaid_vacation_deduction,
-        "adjustment_amount": payroll.adjustment_amount,
-        "net_salary": payroll.net_salary,
-        "paid_amount": payroll.paid_amount,
-        "balance_amount": payroll.balance_amount,
-        "status": payroll.status,
-        "source": "employee_payroll",
-    }
+    return get_employee_ledger(emp_id, db)
 
 
 def get_all_payements(start: date, end: date, db: Session):
     return db.scalars(
-        select(Payments)
-        .options(selectinload(Payments.employee_payroll_tab))
-        .where(Payments.date >= start, Payments.date <= end)
-        .order_by(Payments.date, Payments.id)
+        select(EmployeeLedgerTransaction)
+        .where(EmployeeLedgerTransaction.transaction_date >= _day_start(start), EmployeeLedgerTransaction.transaction_date <= _day_end(end))
+        .order_by(EmployeeLedgerTransaction.transaction_date.asc(), EmployeeLedgerTransaction.id.asc())
     ).all()
 
 
 def get_employee_payments(emp_id, start: date, end: date, db: Session):
     return db.scalars(
-        select(Payments)
-        .options(selectinload(Payments.employee_payroll_tab))
+        select(EmployeeLedgerTransaction)
         .where(
-            Payments.employee_id == emp_id,
-            Payments.date >= start,
-            Payments.date <= end,
+            EmployeeLedgerTransaction.employee_id == emp_id,
+            EmployeeLedgerTransaction.transaction_date >= _day_start(start),
+            EmployeeLedgerTransaction.transaction_date <= _day_end(end),
         )
-        .order_by(Payments.date, Payments.id)
+        .order_by(EmployeeLedgerTransaction.transaction_date.asc(), EmployeeLedgerTransaction.id.asc())
     ).all()
 
 
 def get_last_att_date(emp_id: int, db: Session):
     employee = db.get(Employees, emp_id)
     if not employee:
-        raise EmployeeNotFound("employee not found")
-    latest_payment = db.scalar(
-        select(Payments.end)
-        .where(Payments.employee_id == emp_id, Payments.employee_payroll_id.is_not(None))
-        .order_by(desc(Payments.end), desc(Payments.id))
+        raise ResourceNotFoundException("Employee")
+    latest = db.scalar(
+        select(EmployeeLedgerTransaction.transaction_date)
+        .where(EmployeeLedgerTransaction.employee_id == emp_id)
+        .order_by(EmployeeLedgerTransaction.transaction_date.desc(), EmployeeLedgerTransaction.id.desc())
         .limit(1)
     )
-    return latest_payment
+    return latest.date() if latest else None
 
 
 def add_payments(pay, start, end, db: Session):
-    _legacy_payment_write_disabled()
+    row = EmployeeLedgerTransaction(
+        employee_id=pay.employee_id,
+        type=pay.payment_type,
+        transaction_date=datetime.combine(pay.date, time(12), tzinfo=timezone.utc),
+        amount=pay.amount,
+        description=pay.description,
+    )
+    db.add(row)
+    db.flush()
+    recalculate_employee_financial_total(pay.employee_id, db)
+    db.commit()
+    return row
 
 
 def update_payment(pay, db: Session):
-    _legacy_payment_write_disabled()
+    row = db.get(EmployeeLedgerTransaction, pay.id)
+    if not row:
+        raise ResourceNotFoundException("Ledger transaction")
+    data = pay.model_dump(exclude_unset=True)
+    if data.get("date") is not None:
+        row.transaction_date = datetime.combine(data["date"], time(12), tzinfo=timezone.utc)
+    if data.get("payment_type") is not None:
+        row.type = data["payment_type"]
+    if data.get("amount") is not None:
+        row.amount = data["amount"]
+    if data.get("description") is not None:
+        row.description = data["description"]
+    row.status = "changed"
+    db.add(row)
+    db.flush()
+    recalculate_employee_financial_total(row.employee_id, db)
+    db.commit()
+    return row
 
 
 def delete_payment(pay_id: int, db: Session):
-    _legacy_payment_write_disabled()
+    row = db.get(EmployeeLedgerTransaction, pay_id)
+    if not row:
+        raise ResourceNotFoundException("Ledger transaction")
+    employee_id = row.employee_id
+    db.delete(row)
+    db.flush()
+    recalculate_employee_financial_total(employee_id, db)
+    db.commit()

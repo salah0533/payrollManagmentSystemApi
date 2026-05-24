@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import extract, select
+from sqlalchemy import extract, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.exceptions.db_exceptions.noVacationFound import NoVacationFound
@@ -19,6 +19,22 @@ from app.services.vacation_types_services import (
     get_vacation_type_ids_by_codes,
 )
 from app.services.vacation_balance_service import VacationLedgerEntry, ensure_vacation_balance_available
+
+
+def _normalize_reason(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.strip().split())
+    return normalized or None
+
+
+def ensure_vacation_reason_column(db: Session) -> None:
+    inspector = inspect(db.bind)
+    columns = {column["name"] for column in inspector.get_columns("vacation")}
+    if "reason" in columns:
+        return
+    db.execute(text("ALTER TABLE vacation ADD COLUMN reason VARCHAR"))
+    db.commit()
 
 
 def _vacation_title(status_code: str) -> str:
@@ -127,6 +143,7 @@ def _notify_vacation_status_change(vacation: Vacation, db: Session, actor: User 
     )
 
 def get_all_vacations(year:int,db:Session):
+    ensure_vacation_reason_column(db)
     return db.scalars(
         select(Vacation)
         .join(Employees, Vacation.employee_id == Employees.id)
@@ -137,6 +154,7 @@ def get_all_vacations(year:int,db:Session):
     ).all()
 
 def get_all_current_vacations(db: Session):
+    ensure_vacation_reason_column(db)
     today = date.today()
 
     return db.scalars(
@@ -150,7 +168,7 @@ def get_all_current_vacations(db: Session):
     ).all()
 
 def get_employee_vacations(id:int,start,end,db:Session):
-
+    ensure_vacation_reason_column(db)
     return db.scalars(
         select(Vacation)
         .where(Vacation.employee_id==id,
@@ -174,7 +192,7 @@ def overlab_check(id:int,start,end,db:Session):
     )).all()
 
 def get_emp_all_vacations(emp_id:int,db:Session):
-
+    ensure_vacation_reason_column(db)
     return db.scalars(
         select(Vacation)
         .where(Vacation.employee_id==emp_id)
@@ -282,6 +300,7 @@ def _clear_or_recalculate_removed_vacation_days(
 
     
 def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = None):
+    ensure_vacation_reason_column(db)
     holiday_type = is_holiday_vacation_type(vac.vacation_type, db)
     normalized_status = int(VacationStatuses.approved) if holiday_type else vac.vacation_status
     normalized_paid = normalize_vacation_is_paid(vac.vacation_type, vac.is_paid, db)
@@ -304,6 +323,7 @@ def add_vacation(vac: VacationBaseModel, db: Session, *, actor: User | None = No
         vacation_type=vac.vacation_type,
         vacation_status=normalized_status,
         is_paid=normalized_paid,
+        reason=_normalize_reason(vac.reason),
     )
     db.add(new_vac)
     db.flush()
@@ -333,6 +353,7 @@ def add_bulk_vacations(payload: BulkVacationCreateModel, db: Session, *, actor: 
                     vacation_type=payload.vacation_type,
                     vacation_status=payload.vacation_status,
                     is_paid=payload.is_paid,
+                    reason=payload.reason,
                 ),
                 db,
                 actor=actor,
@@ -341,6 +362,7 @@ def add_bulk_vacations(payload: BulkVacationCreateModel, db: Session, *, actor: 
     return created
     
 def update_vacation(updated_vac: UpdateVacationBaseModel, db: Session, *, actor: User | None = None):
+    ensure_vacation_reason_column(db)
     vac = db.get(Vacation,updated_vac.id)
     if not vac:
         raise NoVacationFound(f"No vacation found with this id {updated_vac.id}")
@@ -355,6 +377,8 @@ def update_vacation(updated_vac: UpdateVacationBaseModel, db: Session, *, actor:
         if val is None or key == "id":
             continue
         setattr(vac,key,val)
+    if "reason" in updated_vac.model_dump(exclude_unset=True):
+        vac.reason = _normalize_reason(updated_vac.reason)
     if is_holiday_vacation_type(vac.vacation_type, db):
         vac.vacation_status = int(VacationStatuses.approved)
     vac.is_paid = normalize_vacation_is_paid(vac.vacation_type, vac.is_paid, db)

@@ -101,6 +101,7 @@ def request_my_vacation(
             vacation_type=payload.vacation_type,
             vacation_status=int(VacationStatuses.pending),
             is_paid=payload.is_paid,
+            reason=payload.reason,
         ),
         db,
         actor=current_user,

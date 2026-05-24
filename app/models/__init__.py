@@ -7,8 +7,9 @@ from app.models.attendance_payroll import (
     AttendanceEvent,
     AuditLog,
     EmployeeCompensation,
+    EmployeeFinancialTotal,
+    EmployeeLedgerTransaction,
     EmployeePayroll,
-    PayrollAdjustment,
     PayrollCalculationHistory,
     PayrollDiscrepancy,
     PayrollPeriod,
@@ -17,7 +18,6 @@ from app.models.attendance_payroll import (
 )
 from app.models.attendence_types import AttendenceTypes
 from app.models.payment_types import PaymentTypes
-from app.models.payments import Payments
 from app.models.salary_type import SalaryType
 from app.models.settings import Settings
 from app.models.vacation import Vacation
