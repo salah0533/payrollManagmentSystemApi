@@ -17,7 +17,12 @@ from app.services.payroll_calculation_service import recalculate_employee_financ
 
 
 DEMO_MARKER = "[demo-old-periods]"
-DEMO_EMAILS = ("demo.ledger.one@example.test", "demo.ledger.two@example.test")
+DEMO_EMAILS = (
+    "demo.ledger.one@payroll-demo-data.com",
+    "demo.ledger.two@payroll-demo-data.com",
+    "demo.ledger.one@example.test",
+    "demo.ledger.two@example.test",
+)
 
 
 def main() -> None:

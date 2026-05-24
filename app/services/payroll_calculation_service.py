@@ -521,6 +521,7 @@ def get_employee_ledger(
     page_size: int = 20,
     start_date: date | None = None,
     end_date: date | None = None,
+    sort: str = "asc",
 ) -> dict:
     employee = db.get(Employees, employee_id)
     if not employee or employee.deleted_at is not None:
@@ -531,6 +532,8 @@ def get_employee_ledger(
         entries = [entry for entry in entries if entry["date"].date() >= start_date]
     if end_date is not None:
         entries = [entry for entry in entries if entry["date"].date() <= end_date]
+    if sort.lower() == "desc":
+        entries = list(reversed(entries))
     safe_page = max(1, int(page or 1))
     safe_page_size = max(1, min(int(page_size or 20), 100))
     total_records = len(entries)

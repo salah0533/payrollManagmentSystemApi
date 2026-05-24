@@ -113,10 +113,11 @@ def get_employee_ledger_view(
     page_size: int = 20,
     start_date: date | None = None,
     end_date: date | None = None,
+    sort: str = "asc",
     db: Session = Depends(get_db),
     current_user: User = Depends(require_self_or_permission("payroll.read_all", employee_param="employee_id")),
 ):
-    return api_success(get_employee_ledger(employee_id, db, page=page, page_size=page_size, start_date=start_date, end_date=end_date))
+    return api_success(get_employee_ledger(employee_id, db, page=page, page_size=page_size, start_date=start_date, end_date=end_date, sort=sort))
 
 
 @router.get("/total/{employee_id}")

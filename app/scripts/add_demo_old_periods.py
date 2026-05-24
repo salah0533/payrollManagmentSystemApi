@@ -19,7 +19,7 @@ from app.services.payroll_calculation_service import calculate_employee_payroll,
 
 
 DEMO_MARKER = "[demo-old-periods]"
-DEMO_EMAILS = ("demo.ledger.one@example.test", "demo.ledger.two@example.test")
+DEMO_EMAILS = ("demo.ledger.one@payroll-demo-data.com", "demo.ledger.two@payroll-demo-data.com")
 
 
 def _utc_now() -> datetime:
@@ -69,7 +69,7 @@ def _ensure_demo_employees(db) -> list[Employees]:
                 email=email,
                 position="Demo Payroll Employee",
                 status="active",
-                hire_date=_month_start(6),
+                hire_date=_month_start(9),
                 salary_type=0,
                 monthly_price=salary,
                 day_price=Decimal("0.00"),
@@ -81,7 +81,7 @@ def _ensure_demo_employees(db) -> list[Employees]:
                 is_active=True,
                 allowed_late=Decimal("0.00"),
                 min_extraTime=Decimal("30.00"),
-                joined=_month_start(6),
+                joined=_month_start(9),
             )
             db.add(employee)
             db.flush()
@@ -101,7 +101,7 @@ def _ensure_demo_employees(db) -> list[Employees]:
                     overtime_rate=employee.extra_hours_price,
                     late_deduction_rate=Decimal("0.00"),
                     currency="DZD",
-                    effective_from=employee.hire_date or employee.joined or _month_start(6),
+                    effective_from=employee.hire_date or employee.joined or _month_start(9),
                     is_active=True,
                 )
             )
@@ -228,7 +228,7 @@ def main() -> None:
         employees = _ensure_demo_employees(db)
         created_payrolls = 0
         created_transactions = 0
-        for month_index, months_back in enumerate((3, 2, 1), start=1):
+        for month_index, months_back in enumerate((7, 6, 5, 4, 3, 2, 1), start=1):
             period = _ensure_period(db, _month_start(months_back))
             for employee_index, employee in enumerate(employees):
                 _upsert_attendance(db, employee, period, employee_index)
