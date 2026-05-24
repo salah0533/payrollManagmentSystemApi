@@ -23,7 +23,6 @@ from app.utility.reference_codes import (
     DEFAULT_ROLE_PERMISSIONS,
     EMPLOYEE_PAYROLL_STATUS_CODES,
     PAYMENT_TYPE_CODES,
-    PAYROLL_ADJUSTMENT_TYPE_CODES,
     PAYROLL_DISCREPANCY_STATUS_CODES,
     PAYROLL_DISCREPANCY_TYPE_CODES,
     PAYROLL_PERIOD_STATUS_CODES,
@@ -175,7 +174,7 @@ def seed_attendance_types_or_statuses(db: Session):
 def seed_payroll_reference_data(db: Session):
     _report_constant_codes("payroll_period_status_codes", PAYROLL_PERIOD_STATUS_CODES)
     _report_constant_codes("employee_payroll_status_codes", EMPLOYEE_PAYROLL_STATUS_CODES)
-    _report_constant_codes("payroll_adjustment_type_codes", PAYROLL_ADJUSTMENT_TYPE_CODES)
+    _report_constant_codes("ledger_transaction_type_codes", PAYMENT_TYPE_CODES)
     _report_constant_codes("payroll_discrepancy_type_codes", PAYROLL_DISCREPANCY_TYPE_CODES)
     _report_constant_codes("payroll_discrepancy_status_codes", PAYROLL_DISCREPANCY_STATUS_CODES)
 
@@ -184,12 +183,11 @@ def seed_payroll_reference_data(db: Session):
             {"id": 0, "code": "payment", "payment_type": "payment"},
             {"id": 1, "code": "bonus", "payment_type": "bonus"},
             {"id": 2, "code": "deduction", "payment_type": "deduction"},
-            {"id": 3, "code": "attendance", "payment_type": "attendance"},
         ]
         for row in rows:
             _upsert_model(db, PaymentTypes, {"code": row["code"]}, {"id": row["id"], "payment_type": row["payment_type"]})
     else:
-        print("payment_types table not found; skipped legacy payment type seeding")
+        print("payment_types table not found; skipped ledger transaction type seeding")
 
     if _table_exists(db, "payroll_policy"):
         _upsert_model(
@@ -207,7 +205,7 @@ def seed_payroll_reference_data(db: Session):
                 "overtime_enabled": True,
                 "monthly_payroll_calculation_mode": "calendar_days",
                 "auto_recalculate_draft_payroll": True,
-                "lock_payroll_after_payment": True,
+                "lock_payroll_after_payment": False,
                 "holidays_json": [],
                 "annual_vacation_days_by_year": {},
                 "allow_vacation_carryover": True,

@@ -18,7 +18,6 @@ class Employees(Base):
     position = Column(String(100), nullable=True)
     status = Column(String(20), nullable=False, default="active", index=True)
     hire_date = Column(Date, nullable=True)
-    dues = Column(DECIMAL, nullable=False)
     salary_type = Column(Integer,ForeignKey("salary_type.id"),nullable=False)
     monthly_price = Column(DECIMAL, nullable=False)
     day_price = Column(DECIMAL, nullable=False)
@@ -43,9 +42,6 @@ class Employees(Base):
     annualvacation_tab = relationship("AnnualVacations",back_populates="employee_tab",
                              cascade="all, delete-orphan")
     
-    payment_tab = relationship("Payments",back_populates="employee_tab",
-                             cascade="all, delete-orphan")
-    
     vacation_tab = relationship("Vacation",back_populates="employee_tab",
                              cascade="all, delete-orphan")
     salary_type_tab = relationship("SalaryType",back_populates="employee_tab")
@@ -66,7 +62,6 @@ class Employees(Base):
             "job_title":self.job_title,
             "phone":self.phone,
             "email":self.email,
-            "dues":self.dues,
             "salary_type":self.salary_type,
             "daily_work_hours":self.daily_work_hours,
             "extra_hours_price":self.extra_hours_price,

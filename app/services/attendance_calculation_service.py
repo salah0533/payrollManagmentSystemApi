@@ -134,6 +134,18 @@ def _get_employee(employee_id: int, db: Session) -> Employees:
     return employee
 
 
+def _assert_attendance_period_open(work_date: date, db: Session) -> None:
+    from app.services.payroll_calculation_service import assert_period_open_for_date
+
+    assert_period_open_for_date(work_date, db)
+
+
+def _assert_attendance_range_open(start_date: date, end_date: date, db: Session) -> None:
+    from app.services.payroll_calculation_service import assert_periods_open_for_range
+
+    assert_periods_open_for_range(start_date, end_date, db)
+
+
 def _resolve_work_date(employee_id: int, event_time: datetime, db: Session) -> tuple[date, object]:
     normalized_time = _normalize_event_time(event_time)
     tentative_date = normalized_time.date()
@@ -499,6 +511,7 @@ def create_attendance_event(
         raise BadRequestException("Invalid attendance event type", message_key="errors.invalid_attendance_event_type")
 
     validation = validate_attendance_event(employee_id, event_type, event_time, db)
+    _assert_attendance_period_open(validation["work_date"], db)
     event = AttendanceEvent(
         employee_id=employee_id,
         event_type=event_type,
@@ -854,6 +867,7 @@ def recalculate_attendance_for_employee(employee_id: int, start_date: date, end_
     _get_employee(employee_id, db)
     if start_date > end_date:
         raise BadRequestException("start_date must be before end_date", message_key="errors.start_before_end")
+    _assert_attendance_range_open(start_date, end_date, db)
 
     current = start_date
     days: list[AttendanceDay] = []
@@ -868,6 +882,7 @@ def recalculate_attendance_for_employee(employee_id: int, start_date: date, end_
 
 
 def mark_all_employees_present(work_date: date, db: Session, created_by: int | None = None) -> dict[str, int]:
+    _assert_attendance_period_open(work_date, db)
     employee_ids = db.scalars(
         select(Employees.id).where(Employees.is_active.is_(True)).order_by(Employees.id.asc())
     ).all()
@@ -1088,6 +1103,7 @@ def _smart_status_values(employee_id: int, work_date: date, target_status: str, 
 
 
 def apply_smart_attendance_status_correction(employee_id: int, work_date: date, target_status: str, corrected_by: int | None, reason: str, options: dict | None, db: Session):
+    _assert_attendance_period_open(work_date, db)
     day = _get_or_create_attendance_day(employee_id, work_date, db)
     old_snapshot = _serialize_day_values(day)
     merged_options = {"source": "hr_correction", **(options or {})}
@@ -1143,6 +1159,7 @@ def _is_holiday_vacation(vacation: Vacation, db: Session) -> bool:
 
 
 def create_attendance_correction(payload, db: Session):
+    _assert_attendance_period_open(payload.work_date, db)
     if payload.correction_type == "smart_status" or payload.field_changed == "status":
         return apply_smart_attendance_status_correction(
             payload.employee_id,
@@ -1238,6 +1255,7 @@ def _validate_attendance_correction(day: AttendanceDay, payload) -> None:
 
 
 def delete_attendance_day(employee_id: int, work_date: date, db: Session, deleted_by: int | None = None) -> dict[str, int]:
+    _assert_attendance_period_open(work_date, db)
     day = db.scalar(
         select(AttendanceDay).where(
             AttendanceDay.employee_id == employee_id,
@@ -1281,6 +1299,7 @@ def delete_attendance_day(employee_id: int, work_date: date, db: Session, delete
 
 
 def review_attendance_day(employee_id: int, work_date: date, review_status: str, reviewed_by: int | None, note: str | None, db: Session) -> AttendanceDay:
+    _assert_attendance_period_open(work_date, db)
     day = _get_or_create_attendance_day(employee_id, work_date, db)
     previous_review_status = day.review_status
     day.review_status = review_status

@@ -187,7 +187,6 @@ def serialize_employee(employee: Employees) -> EmployeeRead:
         position=employee.position,
         status=employee.status,
         hire_date=employee.hire_date,
-        dues=employee.dues,
         salary_type=employee.salary_type,
         monthly_price=employee.monthly_price,
         day_price=employee.day_price,

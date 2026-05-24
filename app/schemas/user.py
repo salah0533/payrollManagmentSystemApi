@@ -123,7 +123,6 @@ class EmployeeBasePayload(BaseModel):
     position: Optional[str] = Field(None, max_length=100)
     status: EmployeeStatus = EmployeeStatus.active
     hire_date: Optional[date] = None
-    dues: Decimal = Decimal("0.00")
     extra_hours_price: Decimal = Decimal("0.00")
     vacation_days: int = 0
     auto_attendance_enabled: bool = False
@@ -169,7 +168,6 @@ class EmployeeUpdateRequest(BaseModel):
     position: Optional[str] = None
     status: Optional[EmployeeStatus] = None
     hire_date: Optional[date] = None
-    dues: Optional[Decimal] = None
     extra_hours_price: Optional[Decimal] = None
     vacation_days: Optional[int] = None
     auto_attendance_enabled: Optional[bool] = None
@@ -192,7 +190,6 @@ class EmployeeRead(BaseModel):
     position: Optional[str] = None
     status: str
     hire_date: Optional[date] = None
-    dues: Decimal
     salary_type: int
     monthly_price: Decimal
     day_price: Decimal

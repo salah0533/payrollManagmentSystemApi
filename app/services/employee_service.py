@@ -140,7 +140,6 @@ def _sync_employee_fields(employee: Employees, payload: EmployeeCreateRequest | 
         employee.joined = employee.joined or employee.hire_date
 
     numeric_fields = (
-        "dues",
         "salary_type",
         "monthly_price",
         "day_price",
@@ -330,7 +329,6 @@ def add_employee(payload: EmployeeCreateRequest, db: Session, *, actor: User | N
         position=payload.position,
         status=payload.status.value if hasattr(payload.status, "value") else str(payload.status),
         hire_date=payload.hire_date or payload.joined or date.today(),
-        dues=payload.dues,
         salary_type=payload.salary_type,
         monthly_price=payload.monthly_price,
         day_price=payload.day_price,
@@ -396,7 +394,6 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
     )
 
     old_data = serialize_model(employee)
-    previous_due_balance = employee.dues
     previous_compensation_state = {
         "salary_type": employee.salary_type,
         "monthly_price": employee.monthly_price,
@@ -420,15 +417,6 @@ def update_employee(employee_id: int, payload: EmployeeUpdateRequest, db: Sessio
             employee.id,
             db,
             reason="employee_compensation_updated",
-            created_by=actor.id if actor else None,
-        )
-    if employee.dues != previous_due_balance:
-        from app.services.payroll_calculation_service import reconcile_existing_payrolls_for_employee_due_change
-
-        reconcile_existing_payrolls_for_employee_due_change(
-            employee.id,
-            db,
-            reason="employee_due_balance_updated",
             created_by=actor.id if actor else None,
         )
     save_audit_log(
