@@ -1799,8 +1799,8 @@ def reopen_locked_employee_payroll(
     if not payroll:
         raise ResourceNotFoundException("Employee payroll")
 
-    if payroll.status != "locked":
-        raise BadRequestException("Only locked payroll can be reopened")
+    if payroll.status not in {"locked", "paid"}:
+        raise BadRequestException("Only paid or locked payroll can be reopened")
 
     reversal_reason = (reason or "").strip()
     if not reversal_reason:
@@ -1951,9 +1951,8 @@ def mark_employee_payroll_paid(employee_payroll_id: int, db: Session, paid_by: i
         db.add(employee)
     _sync_payroll_balance(payroll)
 
-    policy = get_or_create_payroll_policy(db)
     is_settled = payroll.balance_amount == Decimal("0.00")
-    payroll.status = "locked" if is_settled and policy.lock_payroll_after_payment else "paid" if is_settled else "partially_paid"
+    payroll.status = "locked" if is_settled else "partially_paid"
     payroll.paid_at = _utc_now()
     period = db.get(PayrollPeriod, payroll.payroll_period_id)
     if period:

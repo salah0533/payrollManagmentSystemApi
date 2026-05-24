@@ -187,7 +187,6 @@ def put_payroll_policy(
         "overtime_enabled",
         "monthly_payroll_calculation_mode",
         "auto_recalculate_draft_payroll",
-        "lock_payroll_after_payment",
     )
     previous_values = {field: getattr(current_policy, field) for field in impactful_fields}
     policy = update_payroll_policy(db, **payload.model_dump())

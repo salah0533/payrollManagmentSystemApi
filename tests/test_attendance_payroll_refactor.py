@@ -52,6 +52,7 @@ from app.services.payroll_calculation_service import (
     get_or_create_payroll_period_for_date,
     get_payroll_discrepancies,
     mark_employee_payroll_paid,
+    reopen_locked_employee_payroll,
     reconcile_existing_payrolls_for_settings_change,
 )
 from app.services.policy_service import get_employee_compensation, get_working_days, parse_holidays
@@ -1784,6 +1785,25 @@ class AttendancePayrollRefactorTests(unittest.TestCase):
         paid = mark_employee_payroll_paid(approved.id, self.db, paid_by=1)
         self.assertEqual(paid.status, "locked")
         self.assertEqual(Decimal(str(paid.balance_amount)), Decimal("0.00"))
+
+    def test_reopen_accepts_legacy_paid_payroll(self):
+        period = self._payroll_period_for_month(2026, 5)
+        for day in self._month_days():
+            self.db.add(day)
+        self.db.commit()
+
+        payroll = calculate_employee_payroll(self.employee.id, period.id, self.db, force_history=True)
+        approved = approve_employee_payroll(payroll.id, self.db, approved_by=1)
+        paid = mark_employee_payroll_paid(approved.id, self.db, paid_by=1)
+        paid.status = "paid"
+        self.db.add(paid)
+        self.db.commit()
+
+        reopened = reopen_locked_employee_payroll(paid.id, self.db, reopened_by=1, reason="Correct payment")
+
+        self.assertIn(reopened.status, {"draft", "needs_review"})
+        self.assertEqual(Decimal(str(reopened.paid_amount)), Decimal("0.00"))
+        self.assertEqual(Decimal(str(reopened.balance_amount)), Decimal(str(reopened.net_salary)))
 
     def test_payment_fails_with_high_discrepancies(self):
         period = self._payroll_period_for_month(2026, 5)
