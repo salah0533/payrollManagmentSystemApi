@@ -9,6 +9,7 @@ class VacationBaseModel(BaseModel):
     vacation_type:int
     vacation_status:int
     is_paid:bool
+    reason: Optional[str] = None
 
 class UpdateVacationBaseModel(BaseModel):
     id:int
@@ -18,6 +19,7 @@ class UpdateVacationBaseModel(BaseModel):
     vacation_type:Optional[int]=None
     vacation_status:Optional[int]=None
     is_paid:Optional[bool]=None
+    reason: Optional[str] = None
 
 
 class BulkVacationCreateModel(BaseModel):
@@ -27,3 +29,4 @@ class BulkVacationCreateModel(BaseModel):
     vacation_type: int
     vacation_status: int
     is_paid: bool
+    reason: Optional[str] = None

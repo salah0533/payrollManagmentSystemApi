@@ -237,6 +237,7 @@ class SelfVacationRequestCreate(BaseModel):
     end_date: date
     vacation_type: int
     is_paid: bool
+    reason: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_dates(self):
