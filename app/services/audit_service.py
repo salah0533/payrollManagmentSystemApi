@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from collections.abc import Iterable
 from decimal import Decimal
 from typing import Any
@@ -11,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.attendance_payroll import AuditLog
 from app.models.auth import Role, User, UserRole
 from app.models.employees import Employees
-from app.schemas.attendance_payroll import AuditEmployeeSummaryRead, AuditLogRead, AuditUserSummaryRead
+from app.schemas.attendance_payroll import AuditEmployeeSummaryRead, AuditLogPageRead, AuditLogRead, AuditUserSummaryRead
 
 
 def serialize_model(instance, *, fields: Iterable[str] | None = None) -> dict:
@@ -177,18 +176,71 @@ def _load_user_map(db: Session, user_ids: set[int]) -> dict[int, User]:
     return {user.id: user for user in rows}
 
 
+def _iter_audit_search_values(value: Any) -> Iterable[str]:
+    if value is None:
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_audit_search_values(item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_audit_search_values(item)
+        return
+    if isinstance(value, Decimal):
+        yield str(value)
+        return
+    if hasattr(value, "isoformat"):
+        yield value.isoformat()
+        return
+    yield str(value)
+
+
+def _matches_audit_search(row: AuditLogRead, search: str) -> bool:
+    haystacks = [
+        row.action,
+        row.entity_type,
+        row.entity_label,
+        row.ip_address,
+        row.user_agent,
+        row.actor.username if row.actor else None,
+        row.actor.email if row.actor else None,
+        row.actor.employee_name if row.actor else None,
+        row.entity_employee.full_name if row.entity_employee else None,
+        row.entity_employee.email if row.entity_employee else None,
+        row.entity_employee.phone if row.entity_employee else None,
+        row.entity_employee.position if row.entity_employee else None,
+        row.entity_user.username if row.entity_user else None,
+        row.entity_user.email if row.entity_user else None,
+        row.entity_user.employee_name if row.entity_user else None,
+    ]
+
+    for value in haystacks:
+        if isinstance(value, str) and search in value.lower():
+            return True
+
+    for payload in (row.old_data_json, row.new_data_json):
+        for value in _iter_audit_search_values(payload):
+            if search in value.lower():
+                return True
+
+    return False
+
+
 def list_audit_logs(
     db: Session,
     *,
-    limit: int = 100,
+    limit: int | None = 100,
     actions: list[str] | None = None,
     entity_types: list[str] | None = None,
     actor_user_id: int | None = None,
     actor_role: str | None = None,
+    search: str | None = None,
 ) -> list[AuditLogRead]:
     normalized_actions = [value.strip() for value in (actions or []) if value and value.strip()]
     normalized_entity_types = [value.strip() for value in (entity_types or []) if value and value.strip()]
     normalized_actor_role = actor_role.strip().lower() if actor_role and actor_role.strip() else None
+    normalized_search = search.strip().lower() if search and search.strip() else None
 
     statement = select(AuditLog).options(
         selectinload(AuditLog.user).selectinload(User.employee),
@@ -202,19 +254,22 @@ def list_audit_logs(
     if actor_user_id is not None:
         statement = statement.where(AuditLog.user_id == actor_user_id)
     if normalized_actor_role:
-        statement = (
-            statement.join(AuditLog.user)
-            .join(User.user_roles)
-            .join(UserRole.role)
-            .where(Role.code == normalized_actor_role)
-            .distinct()
-        )
+        if normalized_actor_role == "system":
+            statement = statement.where(AuditLog.user_id.is_(None))
+        else:
+            statement = (
+                statement.join(AuditLog.user)
+                .join(User.user_roles)
+                .join(UserRole.role)
+                .where(Role.code == normalized_actor_role)
+                .distinct()
+            )
 
-    rows = db.scalars(
-        statement
-        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
-        .limit(max(1, min(limit, 500)))
-    ).all()
+    ordered_statement = statement.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+    if limit is not None:
+        ordered_statement = ordered_statement.limit(max(1, min(limit, 500)))
+
+    rows = db.scalars(ordered_statement).all()
 
     employee_entity_ids = {
         int(row.entity_id)
@@ -277,4 +332,44 @@ def list_audit_logs(
             )
         )
 
+    if normalized_search:
+        audit_rows = [row for row in audit_rows if _matches_audit_search(row, normalized_search)]
+
+    if limit is not None:
+        return audit_rows[: max(1, min(limit, 500))]
+
     return audit_rows
+
+
+def get_audit_log_page(
+    db: Session,
+    *,
+    page: int = 1,
+    page_size: int = 100,
+    actions: list[str] | None = None,
+    entity_types: list[str] | None = None,
+    actor_user_id: int | None = None,
+    actor_role: str | None = None,
+    search: str | None = None,
+) -> AuditLogPageRead:
+    safe_page = max(1, int(page or 1))
+    safe_page_size = max(1, min(int(page_size or 100), 500))
+    rows = list_audit_logs(
+        db,
+        limit=None,
+        actions=actions,
+        entity_types=entity_types,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        search=search,
+    )
+    total_records = len(rows)
+    total_pages = (total_records + safe_page_size - 1) // safe_page_size if total_records else 0
+    offset = (safe_page - 1) * safe_page_size if total_records else 0
+    return AuditLogPageRead(
+        page=safe_page,
+        page_size=safe_page_size,
+        total_records=total_records,
+        total_pages=total_pages,
+        items=rows[offset : offset + safe_page_size],
+    )
