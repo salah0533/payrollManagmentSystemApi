@@ -40,6 +40,7 @@ def ensure_employee_auto_attendance_schema(db: Session) -> None:
     if not inspector.has_table("employees"):
         return
 
+    dialect_name = db.get_bind().dialect.name
     existing_columns = {column["name"] for column in inspector.get_columns("employees")}
     if "auto_attendance_enabled" not in existing_columns:
         db.execute(
@@ -61,8 +62,10 @@ def ensure_employee_auto_attendance_schema(db: Session) -> None:
             "SET auto_attendance_enabled = COALESCE(auto_attendance_enabled, FALSE)"
         )
     )
-    db.execute(text("ALTER TABLE employees ALTER COLUMN auto_attendance_enabled SET DEFAULT FALSE"))
-    db.execute(text("ALTER TABLE employees ALTER COLUMN auto_attendance_enabled SET NOT NULL"))
+    # SQLite supports ADD COLUMN here, but not ALTER COLUMN for changing defaults/nullability.
+    if dialect_name != "sqlite":
+        db.execute(text("ALTER TABLE employees ALTER COLUMN auto_attendance_enabled SET DEFAULT FALSE"))
+        db.execute(text("ALTER TABLE employees ALTER COLUMN auto_attendance_enabled SET NOT NULL"))
     db.flush()
 
 

@@ -1,14 +1,24 @@
+<<<<<<< HEAD
 from fastapi import APIRouter, Depends
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
+=======
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+>>>>>>> f575f9ffc37488a6a42bf6d9d8b4449a3d855080
 
 from app.core.responses import api_success
 from app.db.session import get_db
 from app.dependencies.auth import require_permissions
+<<<<<<< HEAD
 from app.models.attendance_payroll import AuditLog
 from app.models.auth import Role, User, UserRole
 from app.models.employees import Employees
 from app.schemas.attendance_payroll import AuditLogPageRead, AuditLogRead
+=======
+from app.models.auth import User
+from app.services.audit_service import list_audit_logs as list_audit_logs_service
+>>>>>>> f575f9ffc37488a6a42bf6d9d8b4449a3d855080
 
 
 router = APIRouter()
@@ -121,6 +131,7 @@ def _build_search_filter(search: str):
 
 @router.get("/")
 def list_audit_logs(
+<<<<<<< HEAD
     page: int = 1,
     page_size: int = 150,
     action: list[str] | None = None,
@@ -236,3 +247,22 @@ def list_audit_logs(
             items=items,
         )
     )
+=======
+    limit: int = 100,
+    action: list[str] | None = Query(default=None),
+    entity_type: list[str] | None = Query(default=None),
+    actor_user_id: int | None = None,
+    actor_role: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("audit.read")),
+):
+    rows = list_audit_logs_service(
+        db,
+        limit=limit,
+        actions=action,
+        entity_types=entity_type,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+    )
+    return api_success(rows)
+>>>>>>> f575f9ffc37488a6a42bf6d9d8b4449a3d855080
