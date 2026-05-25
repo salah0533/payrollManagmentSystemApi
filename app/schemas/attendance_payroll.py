@@ -577,5 +577,33 @@ class AuditLogRead(BaseModel):
     ip_address: Optional[str]
     user_agent: Optional[str]
     created_at: datetime
+    actor: Optional["AuditUserSummaryRead"] = None
+    entity_label: Optional[str] = None
+    entity_employee: Optional["AuditEmployeeSummaryRead"] = None
+    entity_user: Optional["AuditUserSummaryRead"] = None
 
     model_config = {"from_attributes": True}
+
+
+class AuditUserSummaryRead(BaseModel):
+    id: int
+    username: str
+    email: Optional[str] = None
+    employee_id: Optional[int] = None
+    employee_name: Optional[str] = None
+    roles: list[str] = Field(default_factory=list)
+
+
+class AuditEmployeeSummaryRead(BaseModel):
+    id: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    position: Optional[str] = None
+    status: Optional[str] = None
+    user_id: Optional[int] = None
+
+
+AuditLogRead.model_rebuild()
