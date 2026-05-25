@@ -275,7 +275,7 @@ def seed_default_settings_or_schedule(db: Session):
                 "start_time": time(hour=8, minute=0),
                 "end_time": time(hour=17, minute=0),
                 "break_minutes": 60,
-                "weekly_off_days": ["friday", "saturday"],
+                "weekly_off_days": ["friday"],
                 "timezone": "Africa/Algiers",
                 "is_default": True,
             },
